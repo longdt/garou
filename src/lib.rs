@@ -12,17 +12,18 @@
 //! - **Bulk Upload Stream** (client→server): Files, images, voice notes
 //! - **ACK Stream** (client→server): Delivery/read receipts
 //! - **Shard Streams** (server→client): Room messages grouped by shard
+//! - **Hot Room Streams** (server→client): Dedicated streams for high-traffic rooms
 //! - **Datagrams**: Typing indicators, presence (unreliable)
 //!
 //! ## Example
 //!
 //! ```rust,ignore
-//! use garou::{ChatServer, ChatConfig};
+//! use garou::{MultiStreamServer, server::ServerConfig};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let config = ChatConfig::default();
-//!     let mut server = ChatServer::new(config);
+//!     let config = ServerConfig::default();
+//!     let mut server = MultiStreamServer::new(config);
 //!     server.start().await?;
 //!     Ok(())
 //! }
@@ -33,9 +34,12 @@ pub mod error;
 pub mod protocol;
 pub mod transport;
 
-// Legacy modules (for backward compatibility)
-pub mod client;
+// Server modules
 pub mod server;
+pub mod server_legacy;
+
+// Client module (legacy, for backward compatibility)
+pub mod client;
 pub mod simple_test;
 
 // Re-export error types
@@ -139,14 +143,22 @@ pub use transport::{
     StreamType,
 };
 
-// Re-export legacy types
+// Re-export new server types
+pub use server::{
+    ConnectionHandler, MultiStreamServer, Room, RoomManager, RoomMember,
+    connection_handler::{ConnectionCommand as ServerConnectionCommand, ServerEvent},
+    multi_stream_server::{ServerConfig, ServerStats},
+    room_manager::{MemberRole, RoomType},
+};
+
+// Re-export legacy types (for backward compatibility)
 pub use client::{ChatClient, ChatClientConfig};
-pub use server::ChatServer;
+pub use server_legacy::ChatServer;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-/// Chat server configuration
+/// Chat server configuration (legacy, for backward compatibility)
 #[derive(Clone, Debug)]
 pub struct ChatConfig {
     /// Server listen address
@@ -315,5 +327,12 @@ mod tests {
             ChatMessageType::Text { content } => assert_eq!(content, "Hello!"),
             _ => panic!("Expected Text message type"),
         }
+    }
+
+    #[test]
+    fn test_server_config() {
+        let config = ServerConfig::default();
+        assert_eq!(config.bind_addr.port(), 4433);
+        assert_eq!(config.max_connections, 10000);
     }
 }

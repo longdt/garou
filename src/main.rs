@@ -1,15 +1,17 @@
 //! QUIC Chat Server and Client Example
 //!
 //! This application demonstrates a high-performance chat system using QUIC protocol
-//! for communication and FlatBuffers for serialization.
+//! with multi-stream architecture for ultra-low-latency messaging.
 //!
 //! Usage:
-//!   cargo run -- server                    # Run server
+//!   cargo run -- server                    # Run legacy server
+//!   cargo run -- server-ms                 # Run multi-stream server
 //!   cargo run -- client <username>         # Run client with username
 //!   cargo run -- demo                      # Run demo with server and client
 
 use garou::client::ClientEvent;
-use garou::{ChatClient, ChatClientConfig, ChatConfig, ChatServer};
+use garou::server::multi_stream_server::ServerConfig;
+use garou::{ChatClient, ChatClientConfig, ChatConfig, ChatServer, MultiStreamServer};
 use std::env;
 use std::time::Duration;
 use tokio::time::{sleep, timeout};
@@ -30,6 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match args[1].as_str() {
         "server" => run_server().await?,
+        "server-ms" | "multi-stream" => run_multi_stream_server().await?,
         "client" => {
             if args.len() < 3 {
                 eprintln!("Usage: cargo run -- client <username>");
@@ -52,20 +55,33 @@ fn print_usage() {
     println!("QUIC Chat Application");
     println!();
     println!("USAGE:");
-    println!("    cargo run -- server");
-    println!("    cargo run -- client <username>");
-    println!("    cargo run -- demo");
-    println!("    cargo run -- test");
+    println!("    cargo run -- server              Start the legacy chat server");
+    println!("    cargo run -- server-ms           Start the multi-stream chat server");
+    println!("    cargo run -- client <username>   Connect as a client with the given username");
+    println!(
+        "    cargo run -- demo                Run a demonstration with server and multiple clients"
+    );
+    println!("    cargo run -- test                Run basic functionality tests");
     println!();
     println!("COMMANDS:");
-    println!("    server              Start the chat server");
+    println!("    server              Start the legacy chat server (simple stream model)");
+    println!("    server-ms           Start the multi-stream chat server (optimized architecture)");
     println!("    client <username>   Connect as a client with the given username");
-    println!("    demo               Run a demonstration with server and multiple clients");
-    println!("    test               Run basic functionality tests");
+    println!("    demo                Run a demonstration with server and multiple clients");
+    println!("    test                Run basic functionality tests");
+    println!();
+    println!("MULTI-STREAM ARCHITECTURE:");
+    println!("    The multi-stream server uses separate QUIC streams for different message types:");
+    println!("    - Control Stream (bidirectional): Auth, ping/pong, commands");
+    println!("    - Chat Commands Stream (client→server): Messages, reactions, edits");
+    println!("    - ACK Stream (client→server): Delivery/read receipts");
+    println!("    - Shard Streams (server→client): Room messages grouped by shard");
+    println!("    - Hot Room Streams (server→client): Dedicated streams for high-traffic rooms");
+    println!("    - Datagrams: Typing indicators, presence (unreliable)");
 }
 
 async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
-    info!("Starting QUIC Chat Server...");
+    info!("Starting Legacy QUIC Chat Server...");
 
     let config = ChatConfig {
         bind_addr: "127.0.0.1:4433".parse()?,
@@ -86,8 +102,44 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+async fn run_multi_stream_server() -> Result<(), Box<dyn std::error::Error>> {
+    info!("Starting Multi-Stream QUIC Chat Server...");
+    info!(
+        "Architecture: Separate streams for control, chat commands, ACKs, and sharded room messages"
+    );
+
+    let config = ServerConfig {
+        bind_addr: "127.0.0.1:4433".parse()?,
+        max_connections: 10000,
+        idle_timeout: Duration::from_secs(300),
+        enable_datagrams: true,
+        ..Default::default()
+    };
+
+    info!("Configuration:");
+    info!("  - Bind address: {}", config.bind_addr);
+    info!("  - Max connections: {}", config.max_connections);
+    info!("  - Number of shards: {}", config.shard_config.num_shards);
+    info!(
+        "  - Hot room threshold: {} msgs/sec",
+        config.shard_config.hot_room_threshold
+    );
+    info!("  - Datagrams enabled: {}", config.enable_datagrams);
+
+    let mut server = MultiStreamServer::new(config);
+
+    // Start server (this will run indefinitely)
+    if let Err(e) = server.start().await {
+        error!("Multi-stream server error: {}", e);
+        return Err(e.into());
+    }
+
+    Ok(())
+}
+
 async fn run_client(username: &str) -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting QUIC Chat Client for user: {}", username);
+    info!("Note: This client uses the legacy protocol. Multi-stream client coming soon.");
 
     let config = ChatClientConfig {
         server_addr: "127.0.0.1:4433".parse()?,
