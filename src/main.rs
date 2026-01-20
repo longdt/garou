@@ -72,6 +72,7 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
         max_connections: 100,
         idle_timeout_secs: 300,
         max_message_size: 1024 * 1024,
+        ..Default::default()
     };
 
     let mut server = ChatServer::new(config);

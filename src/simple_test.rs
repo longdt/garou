@@ -104,6 +104,7 @@ async fn test_configuration() -> Result<(), Box<dyn std::error::Error + Send + S
         max_connections: 50,
         idle_timeout_secs: 120,
         max_message_size: 512 * 1024,
+        ..Default::default()
     };
 
     assert_eq!(server_config.bind_addr.port(), 4434);

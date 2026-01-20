@@ -90,6 +90,7 @@ async fn run_example_server() -> Result<(), Box<dyn std::error::Error>> {
         max_connections: 50,
         idle_timeout_secs: 60,
         max_message_size: 512 * 1024, // 512KB
+        ..Default::default()
     };
 
     let mut server = ChatServer::new(config);
@@ -279,6 +280,9 @@ mod tests {
             max_connections: 10,
             idle_timeout_secs: 30,
             max_message_size: 1024,
+            num_shards: 0,
+            stream_config: Default::default(),
+            shard_config: Default::default(),
         };
 
         assert_eq!(config.bind_addr.port(), 4434);

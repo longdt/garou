@@ -1,19 +1,183 @@
-//! QUIC-based chat server with JSON serialization
+//! Garou - High-Performance QUIC Chat Server
 //!
-//! This library provides a high-performance chat server that uses QUIC protocol
-//! for communication and JSON for serialization/deserialization.
+//! This library provides a distributed chat server implementation using QUIC protocol
+//! with optimized multi-stream architecture for ultra-low-latency messaging.
+//!
+//! ## Architecture
+//!
+//! The server uses a sophisticated stream layout to eliminate head-of-line blocking:
+//!
+//! - **Control Stream** (bidirectional): Auth, ping/pong, commands
+//! - **Chat Commands Stream** (client→server): Messages, reactions, edits
+//! - **Bulk Upload Stream** (client→server): Files, images, voice notes
+//! - **ACK Stream** (client→server): Delivery/read receipts
+//! - **Shard Streams** (server→client): Room messages grouped by shard
+//! - **Datagrams**: Typing indicators, presence (unreliable)
+//!
+//! ## Example
+//!
+//! ```rust,ignore
+//! use garou::{ChatServer, ChatConfig};
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let config = ChatConfig::default();
+//!     let mut server = ChatServer::new(config);
+//!     server.start().await?;
+//!     Ok(())
+//! }
+//! ```
 
-pub mod client;
+// Core modules
 pub mod error;
+pub mod protocol;
+pub mod transport;
+
+// Legacy modules (for backward compatibility)
+pub mod client;
 pub mod server;
 pub mod simple_test;
 
-pub use client::{ChatClient, ChatClientConfig};
+// Re-export error types
 pub use error::{ChatError, Result};
+
+// Re-export protocol types
+pub use protocol::{
+    // Codec traits
+    Decodable,
+    DecodedMessage,
+    Encodable,
+    // Frame types
+    Frame,
+    FrameCodec,
+    FrameType,
+    // Message types
+    messages::{
+        // Chat commands
+        AddReaction,
+        // Control messages
+        Auth,
+        AuthFailed,
+        AuthOk,
+        CreateRoom,
+        DeleteMessage,
+        EditMessage,
+        // Errors
+        Error as ProtocolError,
+        Goodbye,
+        Hello,
+        HelloAck,
+        JoinRoom,
+        LeaveRoom,
+        // ACKs
+        MessageAck,
+        MessageDelivered,
+        // IDs
+        MessageId,
+        MessageRead,
+        // Constants
+        NUM_SHARDS,
+        Ping,
+        Pong,
+        // Presence (datagrams)
+        PresenceAway,
+        PresenceOffline,
+        PresenceOnline,
+        RemoveReaction,
+        // Room messages
+        RoomClose,
+        // Shard management
+        RoomDemoted,
+        RoomId,
+        RoomInit,
+        RoomMessage,
+        RoomMessageDeleted,
+        RoomMessageEdited,
+        RoomPromoted,
+        RoomReactionAdded,
+        RoomReactionRemoved,
+        RoomUserJoined,
+        RoomUserLeft,
+        SendMessage,
+        ServerCommand,
+        ShardAssignment,
+        ShardId,
+        ShardStreamInfo,
+        StopTyping,
+        Throttle,
+        Typing,
+        // Uploads
+        UploadAck,
+        UploadCancel,
+        UploadChunk,
+        UploadComplete,
+        UploadId,
+        UploadStart,
+        UserId,
+        UserInfo,
+        room_shard,
+    },
+};
+
+// Re-export transport types
+pub use transport::{
+    // Connection management
+    ConnectionBuilder,
+    ConnectionCommand,
+    ConnectionEvent,
+    ManagedConnection,
+    // Shard routing
+    RoutingAction,
+    ShardConfig,
+    ShardRouter,
+    // Stream management
+    StreamConfig,
+    StreamHandle,
+    StreamSet,
+    StreamState,
+    StreamStats,
+    StreamType,
+};
+
+// Re-export legacy types
+pub use client::{ChatClient, ChatClientConfig};
 pub use server::ChatServer;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+
+/// Chat server configuration
+#[derive(Clone, Debug)]
+pub struct ChatConfig {
+    /// Server listen address
+    pub bind_addr: std::net::SocketAddr,
+    /// Maximum number of concurrent connections
+    pub max_connections: usize,
+    /// Connection idle timeout in seconds
+    pub idle_timeout_secs: u64,
+    /// Maximum message size in bytes
+    pub max_message_size: usize,
+    /// Number of shards for room distribution
+    pub num_shards: u8,
+    /// Stream configuration
+    pub stream_config: StreamConfig,
+    /// Shard configuration
+    pub shard_config: ShardConfig,
+}
+
+impl Default for ChatConfig {
+    fn default() -> Self {
+        Self {
+            bind_addr: "127.0.0.1:4433".parse().unwrap(),
+            max_connections: 1000,
+            idle_timeout_secs: 300,
+            max_message_size: 1024 * 1024, // 1MB
+            num_shards: NUM_SHARDS,
+            stream_config: StreamConfig::default(),
+            shard_config: ShardConfig::default(),
+        }
+    }
+}
 
 /// Generate a unique message ID
 pub fn generate_message_id() -> String {
@@ -28,31 +192,7 @@ pub fn current_timestamp() -> u64 {
         .as_millis() as u64
 }
 
-/// Chat server configuration
-#[derive(Clone, Debug)]
-pub struct ChatConfig {
-    /// Server listen address
-    pub bind_addr: std::net::SocketAddr,
-    /// Maximum number of concurrent connections
-    pub max_connections: usize,
-    /// Connection idle timeout in seconds
-    pub idle_timeout_secs: u64,
-    /// Maximum message size in bytes
-    pub max_message_size: usize,
-}
-
-impl Default for ChatConfig {
-    fn default() -> Self {
-        Self {
-            bind_addr: "127.0.0.1:4433".parse().unwrap(),
-            max_connections: 1000,
-            idle_timeout_secs: 300,
-            max_message_size: 1024 * 1024, // 1MB
-        }
-    }
-}
-
-/// User information
+/// User information (legacy, for backward compatibility)
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct User {
     pub id: String,
@@ -68,9 +208,18 @@ impl User {
             joined_at: current_timestamp(),
         }
     }
+
+    /// Convert to protocol UserInfo
+    pub fn to_user_info(&self) -> UserInfo {
+        UserInfo {
+            user_id: self.id.parse().unwrap_or(0),
+            username: self.username.clone(),
+            avatar_url: None,
+        }
+    }
 }
 
-/// Chat message types
+/// Chat message types (legacy, for backward compatibility)
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ChatMessageType {
     Text { content: String },
@@ -80,7 +229,7 @@ pub enum ChatMessageType {
     Error { code: u32, message: String },
 }
 
-/// Chat message
+/// Chat message (legacy, for backward compatibility)
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChatMessage {
     pub id: String,
@@ -132,6 +281,39 @@ impl ChatMessage {
             sender: None,
             message_type: ChatMessageType::Error { code, message },
             timestamp: current_timestamp(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_default() {
+        let config = ChatConfig::default();
+        assert_eq!(config.bind_addr.port(), 4433);
+        assert_eq!(config.num_shards, NUM_SHARDS);
+    }
+
+    #[test]
+    fn test_user_creation() {
+        let user = User::new("alice".to_string());
+        assert_eq!(user.username, "alice");
+        assert!(!user.id.is_empty());
+    }
+
+    #[test]
+    fn test_message_creation() {
+        let user = User::new("bob".to_string());
+        let msg = ChatMessage::new_text(user.clone(), "Hello!".to_string());
+
+        assert!(msg.sender.is_some());
+        assert_eq!(msg.sender.unwrap().username, "bob");
+
+        match msg.message_type {
+            ChatMessageType::Text { content } => assert_eq!(content, "Hello!"),
+            _ => panic!("Expected Text message type"),
         }
     }
 }
