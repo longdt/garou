@@ -297,7 +297,7 @@ impl StreamSet {
     pub fn aggregate_stats(&self) -> StreamStats {
         let stats = StreamStats::new();
 
-        let mut add_stats = |handle: &Option<StreamHandle>| {
+        let add_stats = |handle: &Option<StreamHandle>| {
             if let Some(h) = handle {
                 stats
                     .bytes_sent

@@ -93,14 +93,6 @@ The server uses a sophisticated stream layout to eliminate head-of-line blocking
    - Typed message definitions for all protocol messages
    - Encodable/Decodable traits with serde_json (swappable to protobuf)
 
-6. **Legacy ChatServer** (`src/server_legacy.rs`)
-   - Original simple server for backward compatibility
-   - Single-stream-per-message model
-
-7. **ChatClient** (`src/client.rs`)
-   - Legacy client implementation
-   - Event-driven architecture with message handling
-
 ### Frame Types
 
 | Range | Category | Frame Types |
@@ -158,9 +150,6 @@ garou/
 │   ├── lib.rs                 # Library exports and types
 │   ├── main.rs                # CLI interface
 │   ├── error.rs               # Error handling
-│   ├── client.rs              # Legacy QUIC client
-│   ├── server_legacy.rs       # Legacy simple server
-│   ├── simple_test.rs         # Unit tests
 │   ├── server/
 │   │   ├── mod.rs             # Server module exports
 │   │   ├── multi_stream_server.rs  # Multi-stream server
@@ -173,7 +162,7 @@ garou/
 │   │   └── codec.rs           # Encode/decode traits
 │   └── transport/
 │       ├── mod.rs             # Transport exports
-│       ├── connection.rs      # ManagedConnection (skeleton)
+│       ├── connection.rs      # ManagedConnection
 │       ├── streams.rs         # Stream types and management
 │       └── shards.rs          # Shard routing logic
 ├── examples/
@@ -284,7 +273,7 @@ ServerConfig {
 
 ## Test Results
 
-All 51 tests pass:
+All 40 tests pass:
 - Protocol frame encoding/decoding
 - Message serialization
 - Shard routing
@@ -292,6 +281,7 @@ All 51 tests pass:
 - Room management
 - Stream statistics
 - Connection building
+- Server configuration
 
 ## License
 

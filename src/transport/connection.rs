@@ -13,7 +13,7 @@ use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::time::Instant;
 
 use crate::error::{ChatError, Result};
-use crate::protocol::frame::{Frame, FrameCodec, FrameType};
+use crate::protocol::frame::{Frame, FrameCodec};
 use crate::protocol::messages::{RoomId, ShardId, UserId};
 use crate::transport::shards::{RoutingAction, ShardRouter};
 use crate::transport::streams::{StreamConfig, StreamHandle, StreamSet, StreamState, StreamType};
@@ -79,6 +79,7 @@ pub enum ConnectionCommand {
 }
 
 /// Managed QUIC connection with multi-stream support
+#[allow(dead_code)]
 pub struct ManagedConnection {
     /// Underlying QUIC connection
     connection: Connection,
@@ -109,6 +110,7 @@ pub struct ManagedConnection {
 }
 
 /// Handle for a send stream with buffering
+#[allow(dead_code)]
 struct SendStreamHandle {
     stream: SendStream,
     buffer: BytesMut,
@@ -141,6 +143,7 @@ impl SendStreamHandle {
         Ok(())
     }
 
+    #[allow(dead_code)]
     async fn flush(&mut self) -> Result<()> {
         // Quinn streams are automatically flushed, but we could add
         // explicit flushing logic here if needed

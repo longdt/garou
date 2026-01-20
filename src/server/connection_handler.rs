@@ -15,7 +15,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::current_timestamp;
 use crate::error::{ChatError, Result};
-use crate::protocol::codec::{Decodable, DecodedMessage, Encodable};
+use crate::protocol::codec::{Decodable, Encodable};
 use crate::protocol::frame::{Frame, FrameCodec, FrameType};
 use crate::protocol::messages::*;
 use crate::transport::shards::ShardRouter;
@@ -513,7 +513,7 @@ impl ConnectionHandler {
             }
 
             (HandshakeState::Authenticated, FrameType::Pong) => {
-                let pong = Pong::decode_frame(&frame)
+                let _pong = Pong::decode_frame(&frame)
                     .map_err(|e| ChatError::protocol(format!("Invalid Pong: {}", e)))?;
 
                 // Calculate RTT

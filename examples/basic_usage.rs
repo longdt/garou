@@ -1,293 +1,233 @@
-//! Basic usage example for the QUIC Chat Server
+//! Basic Usage Example for Garou Multi-Stream Chat Server
 //!
-//! This example demonstrates how to programmatically use the chat server
-//! and client APIs for building chat applications.
+//! This example demonstrates how to start and configure the multi-stream
+//! QUIC chat server with its optimized architecture.
+//!
+//! Run with: cargo run --example basic_usage
 
-use garou::client::{ChatClientConfig, ClientEvent};
-use garou::{ChatClient, ChatConfig, ChatMessage, ChatMessageType, ChatServer};
-
+use garou::{
+    MultiStreamServer, RoomManager, RoomMember, RoomType, ShardConfig, StreamConfig,
+    server::multi_stream_server::ServerConfig,
+};
 use std::time::Duration;
-use tokio::time::sleep;
-use tracing::{error, info};
+use tracing::{info, warn};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize rustls crypto provider
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
     // Initialize logging
-    tracing_subscriber::fmt().init();
+    tracing_subscriber::fmt::init();
 
-    info!("Starting QUIC Chat Basic Usage Example");
+    info!("Garou Multi-Stream Chat Server - Basic Usage Example");
+    info!("=====================================================");
 
-    // Example 1: Start a server programmatically
-    tokio::spawn(async move {
-        if let Err(e) = run_example_server().await {
-            error!("Server error: {}", e);
-        }
-    });
+    // Example 1: Create server with default configuration
+    example_default_server().await?;
 
-    // Wait for server to start
-    sleep(Duration::from_secs(1)).await;
+    // Example 2: Create server with custom configuration
+    example_custom_config();
 
-    // Example 2: Create clients and demonstrate messaging
-    let client_handles = vec![
-        tokio::spawn(async move {
-            if let Err(e) = run_example_client(
-                "Alice",
-                vec![
-                    "Hello everyone!".to_string(),
-                    "How is everyone doing?".to_string(),
-                ],
-            )
-            .await
-            {
-                error!("Alice client error: {}", e);
-            }
-        }),
-        tokio::spawn(async move {
-            if let Err(e) = run_example_client(
-                "Bob",
-                vec![
-                    "Hi Alice!".to_string(),
-                    "I'm doing great, thanks!".to_string(),
-                ],
-            )
-            .await
-            {
-                error!("Bob client error: {}", e);
-            }
-        }),
-        tokio::spawn(async move {
-            if let Err(e) = run_example_client(
-                "Charlie",
-                vec![
-                    "Hey there!".to_string(),
-                    "This QUIC chat is really fast!".to_string(),
-                ],
-            )
-            .await
-            {
-                error!("Charlie client error: {}", e);
-            }
-        }),
-    ];
+    // Example 3: Room management demonstration
+    example_room_management().await;
 
-    // Wait for all clients to complete
-    for handle in client_handles {
-        if let Err(e) = handle.await {
-            error!("Client join error: {:?}", e);
-        }
-    }
+    // Example 4: Shard configuration explanation
+    example_shard_config();
 
-    info!("Basic usage example completed");
+    info!("Examples completed!");
     Ok(())
 }
 
-async fn run_example_server() -> Result<(), Box<dyn std::error::Error>> {
-    let config = ChatConfig {
-        bind_addr: "127.0.0.1:4433".parse()?,
-        max_connections: 50,
-        idle_timeout_secs: 60,
-        max_message_size: 512 * 1024, // 512KB
-        ..Default::default()
+/// Example 1: Start server with default configuration
+async fn example_default_server() -> Result<(), Box<dyn std::error::Error>> {
+    info!("\n--- Example 1: Default Server Configuration ---");
+
+    let config = ServerConfig::default();
+
+    info!("Default configuration:");
+    info!("  Bind address: {}", config.bind_addr);
+    info!("  Max connections: {}", config.max_connections);
+    info!("  Idle timeout: {:?}", config.idle_timeout);
+    info!("  Datagrams enabled: {}", config.enable_datagrams);
+    info!("  Number of shards: {}", config.shard_config.num_shards);
+
+    // Create server (but don't start it in this example)
+    let server = MultiStreamServer::new(config);
+    let stats = server.get_stats().await;
+
+    info!("Server created:");
+    info!("  Total connections: {}", stats.total_connections);
+    info!("  Total rooms: {}", stats.total_rooms);
+
+    Ok(())
+}
+
+/// Example 2: Custom server configuration
+fn example_custom_config() {
+    info!("\n--- Example 2: Custom Server Configuration ---");
+
+    // Configure streams
+    let stream_config = StreamConfig {
+        max_concurrent_streams: 200,
+        num_shards: 16, // More shards for higher scale
+        max_hot_rooms: 20,
+        send_buffer_size: 128 * 1024, // 128KB
+        recv_buffer_size: 128 * 1024,
+        idle_timeout_secs: 600, // 10 minutes
     };
 
-    let mut server = ChatServer::new(config);
-
-    info!("📡 Example server starting on {}", "127.0.0.1:4433");
-
-    // Run server for the duration of the example
-    let result = tokio::time::timeout(Duration::from_secs(15), server.start()).await;
-
-    match result {
-        Ok(Err(e)) => error!("Server error: {}", e),
-        Err(_) => info!("Server timed out (expected for this example)"),
-        _ => {}
-    }
-
-    Ok(())
-}
-
-async fn run_example_client(
-    username: &str,
-    messages_to_send: Vec<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Small delay to stagger client connections
-    sleep(Duration::from_millis(200)).await;
-
-    let config = ChatClientConfig {
-        server_addr: "127.0.0.1:4433".parse()?,
-        bind_addr: "0.0.0.0:0".parse()?,
-        connect_timeout_secs: 5,
-        keep_alive_secs: 20,
-        max_message_size: 512 * 1024,
+    // Configure shard routing
+    let shard_config = ShardConfig {
+        num_shards: 16,
+        hot_room_threshold: 200,    // Promote at 200 msgs/sec
+        cool_down_threshold: 50,    // Demote below 50 msgs/sec
+        cool_down_period_secs: 120, // Wait 2 minutes before demoting
+        max_hot_rooms: 20,
+        rate_window_secs: 10,
     };
 
-    let mut client = ChatClient::new(config);
+    // Create server config
+    let config = ServerConfig {
+        bind_addr: "0.0.0.0:5000".parse().unwrap(),
+        max_connections: 50000,
+        stream_config,
+        shard_config,
+        idle_timeout: Duration::from_secs(600),
+        enable_datagrams: true,
+    };
 
-    // Connect to server
-    let mut event_rx = client.connect(username.to_string()).await?;
-    info!("🚀 {} connected to chat", username);
+    info!("Custom configuration:");
+    info!("  Bind address: {}", config.bind_addr);
+    info!("  Max connections: {}", config.max_connections);
+    info!("  Number of shards: {}", config.shard_config.num_shards);
+    info!(
+        "  Hot room threshold: {} msgs/sec",
+        config.shard_config.hot_room_threshold
+    );
+    info!(
+        "  Cool down threshold: {} msgs/sec",
+        config.shard_config.cool_down_threshold
+    );
+    info!("  Max hot rooms: {}", config.shard_config.max_hot_rooms);
+}
 
-    // Check connection status
-    if !client.is_connected() {
-        error!("❌ {} connection check failed", username);
-        return Err("Connection failed".into());
+/// Example 3: Room management
+async fn example_room_management() {
+    info!("\n--- Example 3: Room Management ---");
+
+    let room_manager = RoomManager::new();
+
+    // Create a group chat room
+    let creator = RoomMember::new(1, "alice".to_string());
+    let room = room_manager
+        .create_room("Engineering Team".to_string(), RoomType::Group, creator)
+        .await;
+
+    info!("Created room:");
+    info!("  ID: {}", room.id);
+    info!("  Name: {}", room.name);
+    info!("  Type: {:?}", room.room_type);
+
+    // Add members
+    let bob = RoomMember::new(2, "bob".to_string());
+    let charlie = RoomMember::new(3, "charlie".to_string());
+
+    room_manager.join_room(room.id, bob).await;
+    room_manager.join_room(room.id, charlie).await;
+
+    info!("Members in room: {}", room.member_count().await);
+
+    // Create a channel
+    let creator2 = RoomMember::new(1, "alice".to_string());
+    let channel = room_manager
+        .create_room("Announcements".to_string(), RoomType::Channel, creator2)
+        .await;
+
+    info!("Created channel:");
+    info!("  ID: {}", channel.id);
+    info!("  Name: {}", channel.name);
+
+    // Create a DM
+    let dm = room_manager
+        .get_or_create_dm_room(1, "alice".to_string(), 2, "bob".to_string())
+        .await;
+
+    info!("Created DM:");
+    info!("  ID: {}", dm.id);
+    info!("  Type: {:?}", dm.room_type);
+
+    // Stats
+    info!("Total rooms: {}", room_manager.room_count().await);
+    info!(
+        "Alice's rooms: {}",
+        room_manager.get_user_room_ids(1).await.len()
+    );
+}
+
+/// Example 4: Shard configuration explanation
+fn example_shard_config() {
+    info!("\n--- Example 4: Understanding Shard Configuration ---");
+
+    info!("Shard routing distributes rooms across multiple streams:");
+    info!("  - room_id % num_shards = shard_id");
+    info!("  - This prevents head-of-line blocking");
+    info!("  - Hot rooms get dedicated streams");
+    info!("");
+
+    let config = ShardConfig::default();
+
+    info!("Default shard configuration:");
+    info!(
+        "  num_shards: {} (rooms distributed across 8 streams)",
+        config.num_shards
+    );
+    info!(
+        "  hot_room_threshold: {} msgs/sec (promote to dedicated stream)",
+        config.hot_room_threshold
+    );
+    info!(
+        "  cool_down_threshold: {} msgs/sec (demote back to shard)",
+        config.cool_down_threshold
+    );
+    info!(
+        "  cool_down_period: {} seconds (wait before demoting)",
+        config.cool_down_period_secs
+    );
+    info!(
+        "  max_hot_rooms: {} (limit dedicated streams)",
+        config.max_hot_rooms
+    );
+
+    // Show shard distribution
+    info!("");
+    info!("Example shard distribution (8 shards):");
+    for room_id in 0..16u64 {
+        let shard = room_id % config.num_shards as u64;
+        info!("  Room {} -> Shard {}", room_id, shard);
     }
-    info!("✅ {} connection verified", username);
+}
 
-    // Handle events in a separate task
-    let username_for_events = username.to_string();
-    let event_handle = tokio::spawn(async move {
-        let mut message_count = 0;
-        info!("🔄 {} started event handling loop", username_for_events);
-        while let Some(event) = event_rx.recv().await {
-            info!("📥 {} received event: {:?}", username_for_events, event);
-            match event {
-                ClientEvent::Connected => {
-                    info!("✅ {} successfully connected", username_for_events);
-                }
-                ClientEvent::Disconnected(reason) => {
-                    info!("❌ {} disconnected: {}", username_for_events, reason);
-                    break;
-                }
-                ClientEvent::MessageReceived(message) => {
-                    handle_received_message(&username_for_events, &message);
-                    message_count += 1;
+/// To actually run the server, uncomment and use this function
+#[allow(dead_code)]
+async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
+    let config = ServerConfig::default();
+    let mut server = MultiStreamServer::new(config);
 
-                    // Stop after receiving a reasonable number of messages
-                    if message_count >= 10 {
-                        break;
-                    }
-                }
-                ClientEvent::Error(e) => {
-                    error!("❗ {} error: {}", username_for_events, e);
-                }
+    info!("Starting server...");
+    info!("Press Ctrl+C to stop");
+
+    // Handle shutdown signal
+    let shutdown = tokio::signal::ctrl_c();
+
+    tokio::select! {
+        result = server.start() => {
+            if let Err(e) = result {
+                warn!("Server error: {}", e);
             }
         }
-        info!("🔚 {} event handling loop ended", username_for_events);
-    });
-
-    // Send messages with delays
-    for (i, message) in messages_to_send.iter().enumerate() {
-        let delay_ms = 1000 + (i as u64 * 500);
-        info!(
-            "⏱️  {} waiting {}ms before sending message",
-            username, delay_ms
-        );
-        sleep(Duration::from_millis(delay_ms)).await;
-
-        info!("🔄 {} attempting to send message: {}", username, message);
-
-        // Check if still connected before sending
-        if !client.is_connected() {
-            error!("❌ {} not connected, cannot send message", username);
-            break;
-        }
-
-        if let Err(e) = client.send_message(message.clone()).await {
-            error!("Failed to send message from {}: {}", username, e);
-        } else {
-            info!("📤 {} sent: {}", username, message);
+        _ = shutdown => {
+            info!("Shutdown signal received");
+            server.shutdown().await?;
         }
     }
 
-    // Request user list
-    sleep(Duration::from_millis(500)).await;
-    info!("👥 {} requesting user list", username);
-
-    // Check if still connected before requesting user list
-    if !client.is_connected() {
-        error!("❌ {} not connected, cannot request user list", username);
-    } else if let Err(e) = client.request_user_list().await {
-        error!("Failed to request user list: {}", e);
-    } else {
-        info!("✅ {} user list request sent", username);
-    }
-
-    // Wait a bit more to receive messages from others
-    info!("⏱️  {} waiting 3 seconds to receive messages", username);
-    sleep(Duration::from_secs(3)).await;
-
-    // Clean up
-    event_handle.abort();
-    client.disconnect().await?;
-
-    info!("👋 {} left the chat", username);
     Ok(())
-}
-
-fn handle_received_message(username: &str, message: &ChatMessage) {
-    match &message.message_type {
-        ChatMessageType::Text { content } => {
-            if let Some(sender) = &message.sender {
-                // Don't log our own messages
-                if sender.username != username {
-                    info!(
-                        "📨 {} received from {}: {}",
-                        username, sender.username, content
-                    );
-                }
-            }
-        }
-        ChatMessageType::Join { user } => {
-            if user.username != username {
-                info!("👋 {} sees that {} joined", username, user.username);
-            }
-        }
-        ChatMessageType::Leave {
-            username: left_user,
-            ..
-        } => {
-            if left_user != username {
-                info!("👋 {} sees that {} left", username, left_user);
-            }
-        }
-        ChatMessageType::UserList { users } => {
-            let user_names: Vec<String> = users.iter().map(|u| u.username.clone()).collect();
-            info!(
-                "👥 {} sees {} users online: {}",
-                username,
-                users.len(),
-                user_names.join(", ")
-            );
-        }
-        ChatMessageType::Error {
-            code,
-            message: error_msg,
-        } => {
-            error!("❌ {} received error {}: {}", username, code, error_msg);
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_example_client_creation() {
-        let config = ChatClientConfig::default();
-        let client = ChatClient::new(config);
-        assert!(!client.is_connected());
-    }
-
-    #[test]
-    fn test_server_config() {
-        let config = ChatConfig {
-            bind_addr: "127.0.0.1:4434".parse().unwrap(),
-            max_connections: 10,
-            idle_timeout_secs: 30,
-            max_message_size: 1024,
-            num_shards: 0,
-            stream_config: Default::default(),
-            shard_config: Default::default(),
-        };
-
-        assert_eq!(config.bind_addr.port(), 4434);
-        assert_eq!(config.max_connections, 10);
-        assert_eq!(config.idle_timeout_secs, 30);
-        assert_eq!(config.max_message_size, 1024);
-    }
 }

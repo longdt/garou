@@ -17,8 +17,5 @@ pub mod multi_stream_server;
 pub mod room_manager;
 
 pub use connection_handler::ConnectionHandler;
-pub use multi_stream_server::MultiStreamServer;
-pub use room_manager::{Room, RoomManager, RoomMember};
-
-// Re-export the legacy ChatServer for backward compatibility
-pub use super::server_legacy::ChatServer;
+pub use multi_stream_server::{MultiStreamServer, ServerConfig, ServerStats};
+pub use room_manager::{MemberRole, Room, RoomManager, RoomMember, RoomType};

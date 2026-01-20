@@ -9,7 +9,7 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 
 use crate::current_timestamp;
-use crate::protocol::messages::{MessageId, RoomId, RoomMessage, UserId, UserInfo};
+use crate::protocol::messages::{RoomId, RoomMessage, UserId, UserInfo};
 
 /// Room type classification
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

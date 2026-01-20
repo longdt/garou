@@ -17,7 +17,7 @@ use crate::current_timestamp;
 use crate::error::{ChatError, Result};
 use crate::protocol::messages::*;
 use crate::server::connection_handler::{ConnectionCommand, ConnectionHandler, ServerEvent};
-use crate::server::room_manager::{MemberRole, Room, RoomManager, RoomMember, RoomType};
+use crate::server::room_manager::{RoomManager, RoomMember, RoomType};
 use crate::transport::shards::{ShardConfig, ShardRouter};
 use crate::transport::streams::StreamConfig;
 
@@ -52,6 +52,7 @@ impl Default for ServerConfig {
 }
 
 /// Active connection tracking
+#[allow(dead_code)]
 struct ActiveConnection {
     /// User ID (if authenticated)
     user_id: Option<UserId>,
@@ -426,7 +427,7 @@ impl MultiStreamServer {
             Some(r) => r,
             None => {
                 // Room doesn't exist, create it
-                let member = RoomMember::new(user_id, username.clone());
+                let _member = RoomMember::new(user_id, username.clone());
                 self.room_manager
                     .create_room_with_id(room_id, format!("Room {}", room_id), RoomType::Group)
                     .await;
@@ -818,6 +819,7 @@ impl MultiStreamServer {
     }
 
     /// Send a command to a user by user ID
+    #[allow(dead_code)]
     async fn send_to_user(&self, user_id: UserId, cmd: ConnectionCommand) -> Result<()> {
         let conn_id = {
             let user_conns = self.user_connections.read().await;
