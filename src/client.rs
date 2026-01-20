@@ -129,10 +129,13 @@ impl ChatClient {
     fn configure_client(&self) -> Result<QuinnClientConfig> {
         // Create a custom certificate verifier that accepts self-signed certificates
         // WARNING: This is insecure and should only be used for development/testing
-        let crypto = rustls::ClientConfig::builder()
+        let mut crypto = rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(AcceptAnyCertificate))
             .with_no_client_auth();
+
+        // Set ALPN protocol to match server
+        crypto.alpn_protocols = vec![b"chat".to_vec()];
 
         Ok(QuinnClientConfig::new(Arc::new(
             quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
@@ -142,7 +145,7 @@ impl ChatClient {
 
     /// Authenticate with the server
     async fn authenticate(&self, connection: &Connection, user: &User) -> Result<()> {
-        let (mut send_stream, mut recv_stream) = connection.open_bi().await?;
+        let (mut send_stream, _recv_stream) = connection.open_bi().await?;
 
         // Send username as authentication
         send_stream.write_all(user.username.as_bytes()).await?;
@@ -150,12 +153,8 @@ impl ChatClient {
             .finish()
             .map_err(|_| ChatError::connection("Failed to close auth stream"))?;
 
-        // For now, we assume authentication is successful if the stream closes without error
-        recv_stream
-            .read_to_end(0)
-            .await
-            .map_err(|e| ChatError::auth(format!("Authentication failed: {}", e)))?;
-
+        // Authentication is considered successful when the stream is sent
+        // The server doesn't send a response back for this simple authentication
         info!("Authentication successful for user: {}", user.username);
         Ok(())
     }

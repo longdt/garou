@@ -147,7 +147,7 @@ impl ChatServer {
             .with_single_cert(vec![cert_der], key_der)
             .map_err(|e| ChatError::config(format!("Failed to configure TLS: {}", e)))?;
 
-        server_config.alpn_protocols = vec![b"h3".to_vec()];
+        server_config.alpn_protocols = vec![b"chat".to_vec()];
         server_config.max_early_data_size = 0;
 
         // Configure QUIC

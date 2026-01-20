@@ -4,22 +4,24 @@
 //! and client APIs for building chat applications.
 
 use garou::client::{ChatClientConfig, ClientEvent};
-use garou::{ChatClient, ChatConfig, ChatMessage, ChatMessageType, ChatServer, User};
+use garou::{ChatClient, ChatConfig, ChatMessage, ChatMessageType, ChatServer};
+
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{error, info};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize rustls crypto provider
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter("garou=info,quinn=warn")
-        .init();
+    tracing_subscriber::fmt().init();
 
     info!("Starting QUIC Chat Basic Usage Example");
 
     // Example 1: Start a server programmatically
-    tokio::spawn(async {
+    tokio::spawn(async move {
         if let Err(e) = run_example_server().await {
             error!("Server error: {}", e);
         }
@@ -30,33 +32,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 2: Create clients and demonstrate messaging
     let client_handles = vec![
-        tokio::spawn(run_example_client(
-            "Alice",
-            vec![
-                "Hello everyone!".to_string(),
-                "How is everyone doing?".to_string(),
-            ],
-        )),
-        tokio::spawn(run_example_client(
-            "Bob",
-            vec![
-                "Hi Alice!".to_string(),
-                "I'm doing great, thanks!".to_string(),
-            ],
-        )),
-        tokio::spawn(run_example_client(
-            "Charlie",
-            vec![
-                "Hey there!".to_string(),
-                "This QUIC chat is really fast!".to_string(),
-            ],
-        )),
+        tokio::spawn(async move {
+            if let Err(e) = run_example_client(
+                "Alice",
+                vec![
+                    "Hello everyone!".to_string(),
+                    "How is everyone doing?".to_string(),
+                ],
+            )
+            .await
+            {
+                error!("Alice client error: {}", e);
+            }
+        }),
+        tokio::spawn(async move {
+            if let Err(e) = run_example_client(
+                "Bob",
+                vec![
+                    "Hi Alice!".to_string(),
+                    "I'm doing great, thanks!".to_string(),
+                ],
+            )
+            .await
+            {
+                error!("Bob client error: {}", e);
+            }
+        }),
+        tokio::spawn(async move {
+            if let Err(e) = run_example_client(
+                "Charlie",
+                vec![
+                    "Hey there!".to_string(),
+                    "This QUIC chat is really fast!".to_string(),
+                ],
+            )
+            .await
+            {
+                error!("Charlie client error: {}", e);
+            }
+        }),
     ];
 
     // Wait for all clients to complete
     for handle in client_handles {
         if let Err(e) = handle.await {
-            error!("Client error: {:?}", e);
+            error!("Client join error: {:?}", e);
         }
     }
 
@@ -109,11 +129,20 @@ async fn run_example_client(
     let mut event_rx = client.connect(username.to_string()).await?;
     info!("🚀 {} connected to chat", username);
 
+    // Check connection status
+    if !client.is_connected() {
+        error!("❌ {} connection check failed", username);
+        return Err("Connection failed".into());
+    }
+    info!("✅ {} connection verified", username);
+
     // Handle events in a separate task
     let username_for_events = username.to_string();
     let event_handle = tokio::spawn(async move {
         let mut message_count = 0;
+        info!("🔄 {} started event handling loop", username_for_events);
         while let Some(event) = event_rx.recv().await {
+            info!("📥 {} received event: {:?}", username_for_events, event);
             match event {
                 ClientEvent::Connected => {
                     info!("✅ {} successfully connected", username_for_events);
@@ -136,11 +165,25 @@ async fn run_example_client(
                 }
             }
         }
+        info!("🔚 {} event handling loop ended", username_for_events);
     });
 
     // Send messages with delays
     for (i, message) in messages_to_send.iter().enumerate() {
-        sleep(Duration::from_millis(1000 + (i as u64 * 500))).await;
+        let delay_ms = 1000 + (i as u64 * 500);
+        info!(
+            "⏱️  {} waiting {}ms before sending message",
+            username, delay_ms
+        );
+        sleep(Duration::from_millis(delay_ms)).await;
+
+        info!("🔄 {} attempting to send message: {}", username, message);
+
+        // Check if still connected before sending
+        if !client.is_connected() {
+            error!("❌ {} not connected, cannot send message", username);
+            break;
+        }
 
         if let Err(e) = client.send_message(message.clone()).await {
             error!("Failed to send message from {}: {}", username, e);
@@ -151,11 +194,19 @@ async fn run_example_client(
 
     // Request user list
     sleep(Duration::from_millis(500)).await;
-    if let Err(e) = client.request_user_list().await {
+    info!("👥 {} requesting user list", username);
+
+    // Check if still connected before requesting user list
+    if !client.is_connected() {
+        error!("❌ {} not connected, cannot request user list", username);
+    } else if let Err(e) = client.request_user_list().await {
         error!("Failed to request user list: {}", e);
+    } else {
+        info!("✅ {} user list request sent", username);
     }
 
     // Wait a bit more to receive messages from others
+    info!("⏱️  {} waiting 3 seconds to receive messages", username);
     sleep(Duration::from_secs(3)).await;
 
     // Clean up
@@ -193,7 +244,7 @@ fn handle_received_message(username: &str, message: &ChatMessage) {
             }
         }
         ChatMessageType::UserList { users } => {
-            let user_names: Vec<&String> = users.iter().map(|u| &u.username).collect();
+            let user_names: Vec<String> = users.iter().map(|u| u.username.clone()).collect();
             info!(
                 "👥 {} sees {} users online: {}",
                 username,
