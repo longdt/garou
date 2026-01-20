@@ -1,0 +1,71 @@
+namespace Chat;
+
+enum MessageType: byte {
+    Text = 0,
+    Join = 1,
+    Leave = 2,
+    UserList = 3,
+    Error = 4
+}
+
+table User {
+    id: string;
+    username: string;
+    joined_at: uint64;
+}
+
+table TextMessage {
+    content: string;
+    timestamp: uint64;
+}
+
+table JoinMessage {
+    user: User;
+}
+
+table LeaveMessage {
+    user_id: string;
+    username: string;
+}
+
+table UserListMessage {
+    users: [User];
+}
+
+table ErrorMessage {
+    code: uint32;
+    message: string;
+}
+
+union MessageData {
+    TextMessage,
+    JoinMessage,
+    LeaveMessage,
+    UserListMessage,
+    ErrorMessage
+}
+
+table ChatMessage {
+    id: string;
+    sender: User;
+    message_type: MessageType;
+    data: MessageData;
+    timestamp: uint64;
+}
+
+table ChatRequest {
+    id: string;
+    user: User;
+    message_type: MessageType;
+    data: MessageData;
+    timestamp: uint64;
+}
+
+table ChatResponse {
+    id: string;
+    success: bool;
+    message: ChatMessage;
+    error: ErrorMessage;
+}
+
+root_type ChatMessage;
