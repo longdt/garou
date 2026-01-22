@@ -128,6 +128,11 @@ impl MultiStreamServer {
         let key_der =
             PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(cert.serialize_private_key_der()));
 
+        // Install the ring crypto provider for rustls
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .ok(); // Ignore error if already installed
+
         // Configure rustls
         let mut server_config = rustls::ServerConfig::builder()
             .with_no_client_auth()
