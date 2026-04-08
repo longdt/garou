@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use quinn::Endpoint;
@@ -58,8 +59,8 @@ struct ActiveConnection {
     user_id: Option<UserId>,
     /// Username
     username: Option<String>,
-    /// Command channel to send commands to this connection
-    command_tx: mpsc::UnboundedSender<ConnectionCommand>,
+    /// Command channel to send commands to this connection (bounded for backpressure)
+    command_tx: mpsc::Sender<ConnectionCommand>,
     /// Remote address
     remote_addr: SocketAddr,
     /// Connection time
@@ -80,8 +81,8 @@ pub struct MultiStreamServer {
     connections: Arc<RwLock<HashMap<String, ActiveConnection>>>,
     /// User ID to connection ID mapping
     user_connections: Arc<RwLock<HashMap<UserId, String>>>,
-    /// Message ID counter
-    next_message_id: Arc<RwLock<MessageId>>,
+    /// Message ID counter (lock-free)
+    next_message_id: Arc<AtomicU64>,
 }
 
 impl MultiStreamServer {
@@ -97,7 +98,7 @@ impl MultiStreamServer {
             shard_router,
             connections: Arc::new(RwLock::new(HashMap::new())),
             user_connections: Arc::new(RwLock::new(HashMap::new())),
-            next_message_id: Arc::new(RwLock::new(1)),
+            next_message_id: Arc::new(AtomicU64::new(1)),
         }
     }
 
@@ -117,7 +118,7 @@ impl MultiStreamServer {
     }
 
     /// Start the server
-    pub async fn start(&mut self) -> Result<()> {
+    pub async fn start(mut self) -> Result<()> {
         info!("Starting multi-stream server on {}", self.config.bind_addr);
 
         // Generate self-signed certificate for development
@@ -171,12 +172,15 @@ impl MultiStreamServer {
             .create_room_with_id(1, "General".to_string(), RoomType::Channel)
             .await;
 
+        // Wrap in Arc once — all spawned tasks clone this Arc (BUG-002 fix)
+        let server = Arc::new(self);
+
         // Accept connections
-        self.accept_connections(endpoint).await
+        server.accept_connections(endpoint).await
     }
 
     /// Accept incoming connections
-    async fn accept_connections(&self, endpoint: Endpoint) -> Result<()> {
+    async fn accept_connections(self: &Arc<Self>, endpoint: Endpoint) -> Result<()> {
         loop {
             match endpoint.accept().await {
                 Some(incoming) => {
@@ -190,8 +194,8 @@ impl MultiStreamServer {
                         }
                     }
 
-                    // Spawn connection handler
-                    let server = self.clone_ref();
+                    // Clone Arc for spawned task — no re-wrapping
+                    let server = Arc::clone(self);
                     tokio::spawn(async move {
                         if let Err(e) = server.handle_incoming(incoming).await {
                             error!("Connection handling failed: {}", e);
@@ -208,16 +212,16 @@ impl MultiStreamServer {
     }
 
     /// Handle an incoming connection
-    async fn handle_incoming(&self, incoming: quinn::Incoming) -> Result<()> {
+    async fn handle_incoming(self: &Arc<Self>, incoming: quinn::Incoming) -> Result<()> {
         let connection = incoming.await?;
         let remote_addr = connection.remote_address();
         let conn_id = uuid::Uuid::new_v4().to_string();
 
         debug!("New connection {} from {}", conn_id, remote_addr);
 
-        // Create channels for this connection
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
-        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        // Create bounded channels for this connection (backpressure, BUG-004 fix)
+        let (event_tx, event_rx) = mpsc::channel(1024);
+        let (command_tx, command_rx) = mpsc::channel(1024);
 
         // Register connection (before auth, so we can track it)
         {
@@ -249,7 +253,7 @@ impl MultiStreamServer {
 
         // Spawn event processor task
         let conn_id_clone = conn_id.clone();
-        let server = self.clone_ref();
+        let server = Arc::clone(self);
         let event_task = tokio::spawn(async move {
             server.process_events(conn_id_clone, event_rx).await;
         });
@@ -274,7 +278,7 @@ impl MultiStreamServer {
     async fn process_events(
         &self,
         conn_id: String,
-        mut event_rx: mpsc::UnboundedReceiver<ServerEvent>,
+        mut event_rx: mpsc::Receiver<ServerEvent>,
     ) {
         while let Some(event) = event_rx.recv().await {
             if let Err(e) = self.handle_event(&conn_id, event).await {
@@ -544,13 +548,8 @@ impl MultiStreamServer {
                 .unwrap_or_else(|| format!("user_{}", user_id))
         };
 
-        // Generate message ID
-        let message_id = {
-            let mut id = self.next_message_id.write().await;
-            let msg_id = *id;
-            *id += 1;
-            msg_id
-        };
+        // Generate message ID — lock-free fetch_add
+        let message_id = self.next_message_id.fetch_add(1, Ordering::Relaxed);
 
         let timestamp = current_timestamp();
 
@@ -607,29 +606,13 @@ impl MultiStreamServer {
     async fn handle_edit_message(
         &self,
         _conn_id: &str,
-        user_id: UserId,
-        message_id: MessageId,
-        content: String,
+        _user_id: UserId,
+        _message_id: MessageId,
+        _content: String,
     ) -> Result<()> {
-        // In production, would look up the message's room_id from storage
-        // For now, broadcast to all rooms the user is in
-        let room_ids = self.room_manager.get_user_room_ids(user_id).await;
-
-        let edited = RoomMessageEdited {
-            message_id,
-            room_id: 0, // Would be actual room ID
-            editor_id: user_id,
-            content,
-            edited_at: current_timestamp(),
-        };
-
-        for room_id in room_ids {
-            let mut edit = edited.clone();
-            edit.room_id = room_id;
-            self.broadcast_to_room(room_id, ConnectionCommand::SendMessageEdited(edit), None)
-                .await?;
-        }
-
+        // TODO(Unit 5): Look up message's room_id from NATS message store by message_id,
+        // then broadcast RoomMessageEdited to that room only.
+        // Placeholder until NATS JetStream integration is complete.
         Ok(())
     }
 
@@ -637,25 +620,11 @@ impl MultiStreamServer {
     async fn handle_delete_message(
         &self,
         _conn_id: &str,
-        user_id: UserId,
-        message_id: MessageId,
+        _user_id: UserId,
+        _message_id: MessageId,
     ) -> Result<()> {
-        let room_ids = self.room_manager.get_user_room_ids(user_id).await;
-
-        let deleted = RoomMessageDeleted {
-            message_id,
-            room_id: 0,
-            deleted_by: user_id,
-            deleted_at: current_timestamp(),
-        };
-
-        for room_id in room_ids {
-            let mut del = deleted.clone();
-            del.room_id = room_id;
-            self.broadcast_to_room(room_id, ConnectionCommand::SendMessageDeleted(del), None)
-                .await?;
-        }
-
+        // TODO(Unit 5): Look up message's room_id from NATS message store by message_id,
+        // then broadcast RoomMessageDeleted to that room only.
         Ok(())
     }
 
@@ -663,26 +632,12 @@ impl MultiStreamServer {
     async fn handle_add_reaction(
         &self,
         _conn_id: &str,
-        user_id: UserId,
-        message_id: MessageId,
-        emoji: String,
+        _user_id: UserId,
+        _message_id: MessageId,
+        _emoji: String,
     ) -> Result<()> {
-        let room_ids = self.room_manager.get_user_room_ids(user_id).await;
-
-        let reaction = RoomReactionAdded {
-            message_id,
-            room_id: 0,
-            user_id,
-            emoji,
-        };
-
-        for room_id in room_ids {
-            let mut r = reaction.clone();
-            r.room_id = room_id;
-            self.broadcast_to_room(room_id, ConnectionCommand::SendReactionAdded(r), None)
-                .await?;
-        }
-
+        // TODO(Unit 5): Look up message's room_id from NATS message store by message_id,
+        // then broadcast RoomReactionAdded to that room only.
         Ok(())
     }
 
@@ -690,26 +645,12 @@ impl MultiStreamServer {
     async fn handle_remove_reaction(
         &self,
         _conn_id: &str,
-        user_id: UserId,
-        message_id: MessageId,
-        emoji: String,
+        _user_id: UserId,
+        _message_id: MessageId,
+        _emoji: String,
     ) -> Result<()> {
-        let room_ids = self.room_manager.get_user_room_ids(user_id).await;
-
-        let reaction = RoomReactionRemoved {
-            message_id,
-            room_id: 0,
-            user_id,
-            emoji,
-        };
-
-        for room_id in room_ids {
-            let mut r = reaction.clone();
-            r.room_id = room_id;
-            self.broadcast_to_room(room_id, ConnectionCommand::SendReactionRemoved(r), None)
-                .await?;
-        }
-
+        // TODO(Unit 5): Look up message's room_id from NATS message store by message_id,
+        // then broadcast RoomReactionRemoved to that room only.
         Ok(())
     }
 
@@ -818,7 +759,8 @@ impl MultiStreamServer {
     async fn send_to_connection(&self, conn_id: &str, cmd: ConnectionCommand) -> Result<()> {
         let conns = self.connections.read().await;
         if let Some(conn) = conns.get(conn_id) {
-            let _ = conn.command_tx.send(cmd);
+            // Bounded send: if channel is full, drop the message (backpressure — client is slow)
+            let _ = conn.command_tx.try_send(cmd);
         }
         Ok(())
     }
@@ -864,9 +806,9 @@ impl MultiStreamServer {
 
             if let Some(conn_id) = user_conns.get(&member_id) {
                 if let Some(conn) = conns.get(conn_id) {
-                    // Clone the command for each recipient
+                    // Clone the command for each recipient; try_send drops if channel full
                     let cmd_clone = clone_command(&cmd);
-                    let _ = conn.command_tx.send(cmd_clone);
+                    let _ = conn.command_tx.try_send(cmd_clone);
                 }
             }
         }
@@ -935,34 +877,22 @@ impl MultiStreamServer {
         }
     }
 
-    /// Shutdown the server
-    pub async fn shutdown(&mut self) -> Result<()> {
-        if let Some(endpoint) = self.endpoint.take() {
-            // Close all connections
+    /// Shutdown the server gracefully
+    pub async fn shutdown(self: &Arc<Self>) -> Result<()> {
+        if let Some(endpoint) = self.endpoint.clone() {
+            // Notify all connections to close
             let conns = self.connections.read().await;
-            for (_, conn) in conns.iter() {
+            for conn in conns.values() {
                 let _ = conn
                     .command_tx
-                    .send(ConnectionCommand::Close("Server shutdown".to_string()));
+                    .send(ConnectionCommand::Close("Server shutdown".to_string()))
+                    .await;
             }
 
             endpoint.close(0u32.into(), b"Server shutdown");
             info!("Server shutdown complete");
         }
         Ok(())
-    }
-
-    /// Clone reference for spawning tasks
-    fn clone_ref(&self) -> Arc<Self> {
-        Arc::new(Self {
-            config: self.config.clone(),
-            endpoint: self.endpoint.clone(),
-            room_manager: Arc::clone(&self.room_manager),
-            shard_router: Arc::clone(&self.shard_router),
-            connections: Arc::clone(&self.connections),
-            user_connections: Arc::clone(&self.user_connections),
-            next_message_id: Arc::clone(&self.next_message_id),
-        })
     }
 }
 

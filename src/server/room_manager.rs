@@ -2,7 +2,7 @@
 //!
 //! This module handles server-side room state, member tracking, and room lifecycle.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -116,7 +116,7 @@ pub struct Room {
     /// Room members indexed by user ID
     members: RwLock<HashMap<UserId, RoomMember>>,
     /// Recent messages (circular buffer, configurable size)
-    recent_messages: RwLock<Vec<RoomMessage>>,
+    recent_messages: RwLock<VecDeque<RoomMessage>>,
     /// Maximum recent messages to keep
     max_recent_messages: usize,
     /// Room creation timestamp
@@ -138,7 +138,7 @@ impl Room {
             name,
             room_type,
             members: RwLock::new(HashMap::new()),
-            recent_messages: RwLock::new(Vec::new()),
+            recent_messages: RwLock::new(VecDeque::new()),
             max_recent_messages: 100,
             created_at: now,
             last_message_at: RwLock::new(now),
@@ -224,12 +224,10 @@ impl Room {
         let mut last_msg = self.last_message_at.write().await;
         let mut count = self.message_count.write().await;
 
-        // Add message
-        messages.push(message);
-
-        // Trim if over limit
+        // Add message to back; pop front when over limit — O(1) for both operations
+        messages.push_back(message);
         if messages.len() > self.max_recent_messages {
-            messages.remove(0);
+            messages.pop_front();
         }
 
         // Update stats

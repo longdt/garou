@@ -191,11 +191,11 @@ pub struct ConnectionHandler {
     /// Rooms this connection is subscribed to
     subscribed_rooms: RwLock<HashSet<RoomId>>,
 
-    /// Channel for sending events to the server
-    event_tx: mpsc::UnboundedSender<ServerEvent>,
+    /// Channel for sending events to the server (bounded for backpressure)
+    event_tx: mpsc::Sender<ServerEvent>,
 
-    /// Channel for receiving commands from the server
-    command_rx: RwLock<Option<mpsc::UnboundedReceiver<ConnectionCommand>>>,
+    /// Channel for receiving commands from the server (bounded for backpressure)
+    command_rx: RwLock<Option<mpsc::Receiver<ConnectionCommand>>>,
 
     /// Control stream sender
     control_send: RwLock<Option<SendStream>>,
@@ -222,8 +222,8 @@ impl ConnectionHandler {
         connection: Connection,
         config: StreamConfig,
         shard_router: Arc<ShardRouter>,
-        event_tx: mpsc::UnboundedSender<ServerEvent>,
-        command_rx: mpsc::UnboundedReceiver<ConnectionCommand>,
+        event_tx: mpsc::Sender<ServerEvent>,
+        command_rx: mpsc::Receiver<ConnectionCommand>,
     ) -> Self {
         let num_shards = config.num_shards as usize;
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -730,7 +730,7 @@ impl ConnectionHandler {
                 let msg = SendMessage::decode_frame(&frame)
                     .map_err(|e| ChatError::protocol(format!("Invalid SendMessage: {}", e)))?;
 
-                let _ = self.event_tx.send(ServerEvent::SendMessage {
+                let _ = self.event_tx.try_send(ServerEvent::SendMessage {
                     user_id,
                     room_id: msg.room_id,
                     content: msg.content,
@@ -743,7 +743,7 @@ impl ConnectionHandler {
                 let msg = EditMessage::decode_frame(&frame)
                     .map_err(|e| ChatError::protocol(format!("Invalid EditMessage: {}", e)))?;
 
-                let _ = self.event_tx.send(ServerEvent::EditMessage {
+                let _ = self.event_tx.try_send(ServerEvent::EditMessage {
                     user_id,
                     message_id: msg.message_id,
                     content: msg.content,
@@ -754,7 +754,7 @@ impl ConnectionHandler {
                 let msg = DeleteMessage::decode_frame(&frame)
                     .map_err(|e| ChatError::protocol(format!("Invalid DeleteMessage: {}", e)))?;
 
-                let _ = self.event_tx.send(ServerEvent::DeleteMessage {
+                let _ = self.event_tx.try_send(ServerEvent::DeleteMessage {
                     user_id,
                     message_id: msg.message_id,
                 });
@@ -764,7 +764,7 @@ impl ConnectionHandler {
                 let msg = AddReaction::decode_frame(&frame)
                     .map_err(|e| ChatError::protocol(format!("Invalid AddReaction: {}", e)))?;
 
-                let _ = self.event_tx.send(ServerEvent::AddReaction {
+                let _ = self.event_tx.try_send(ServerEvent::AddReaction {
                     user_id,
                     message_id: msg.message_id,
                     emoji: msg.emoji,
@@ -775,7 +775,7 @@ impl ConnectionHandler {
                 let msg = RemoveReaction::decode_frame(&frame)
                     .map_err(|e| ChatError::protocol(format!("Invalid RemoveReaction: {}", e)))?;
 
-                let _ = self.event_tx.send(ServerEvent::RemoveReaction {
+                let _ = self.event_tx.try_send(ServerEvent::RemoveReaction {
                     user_id,
                     message_id: msg.message_id,
                     emoji: msg.emoji,
@@ -792,7 +792,7 @@ impl ConnectionHandler {
                 // Register with shard router
                 self.shard_router.register_room(msg.room_id).await;
 
-                let _ = self.event_tx.send(ServerEvent::JoinRoom {
+                let _ = self.event_tx.try_send(ServerEvent::JoinRoom {
                     user_id,
                     room_id: msg.room_id,
                 });
@@ -805,7 +805,7 @@ impl ConnectionHandler {
                 // Remove subscription
                 self.subscribed_rooms.write().await.remove(&msg.room_id);
 
-                let _ = self.event_tx.send(ServerEvent::LeaveRoom {
+                let _ = self.event_tx.try_send(ServerEvent::LeaveRoom {
                     user_id,
                     room_id: msg.room_id,
                 });
@@ -815,7 +815,7 @@ impl ConnectionHandler {
                 let msg = CreateRoom::decode_frame(&frame)
                     .map_err(|e| ChatError::protocol(format!("Invalid CreateRoom: {}", e)))?;
 
-                let _ = self.event_tx.send(ServerEvent::CreateRoom {
+                let _ = self.event_tx.try_send(ServerEvent::CreateRoom {
                     user_id,
                     name: msg.name,
                     room_type: msg.room_type,
@@ -886,7 +886,7 @@ impl ConnectionHandler {
                 let msg = Typing::decode_frame(&frame)
                     .map_err(|e| ChatError::protocol(format!("Invalid Typing: {}", e)))?;
 
-                let _ = self.event_tx.send(ServerEvent::Typing {
+                let _ = self.event_tx.try_send(ServerEvent::Typing {
                     user_id,
                     room_id: msg.room_id,
                 });
@@ -896,7 +896,7 @@ impl ConnectionHandler {
                 let msg = StopTyping::decode_frame(&frame)
                     .map_err(|e| ChatError::protocol(format!("Invalid StopTyping: {}", e)))?;
 
-                let _ = self.event_tx.send(ServerEvent::StopTyping {
+                let _ = self.event_tx.try_send(ServerEvent::StopTyping {
                     user_id,
                     room_id: msg.room_id,
                 });
@@ -906,7 +906,7 @@ impl ConnectionHandler {
                 let msg = PresenceOnline::decode_frame(&frame)
                     .map_err(|e| ChatError::protocol(format!("Invalid PresenceOnline: {}", e)))?;
 
-                let _ = self.event_tx.send(ServerEvent::PresenceUpdate {
+                let _ = self.event_tx.try_send(ServerEvent::PresenceUpdate {
                     user_id,
                     status: msg.status.unwrap_or_else(|| "online".to_string()),
                 });
@@ -1228,8 +1228,8 @@ impl ConnectionHandlerBuilder {
     pub fn build(
         self,
         connection: Connection,
-        event_tx: mpsc::UnboundedSender<ServerEvent>,
-        command_rx: mpsc::UnboundedReceiver<ConnectionCommand>,
+        event_tx: mpsc::Sender<ServerEvent>,
+        command_rx: mpsc::Receiver<ConnectionCommand>,
     ) -> ConnectionHandler {
         let shard_router = self
             .shard_router

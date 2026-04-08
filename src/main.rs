@@ -121,9 +121,9 @@ async fn run_server(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     );
     info!("  - Datagrams enabled: {}", config.enable_datagrams);
 
-    let mut server = MultiStreamServer::new(config);
+    let server = MultiStreamServer::new(config);
 
-    // Start server (this will run indefinitely)
+    // Start server (consumes server, wraps in Arc internally)
     if let Err(e) = server.start().await {
         error!("Server error: {}", e);
         return Err(e.into());

@@ -209,25 +209,14 @@ fn example_shard_config() {
 #[allow(dead_code)]
 async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     let config = ServerConfig::default();
-    let mut server = MultiStreamServer::new(config);
+    let server = MultiStreamServer::new(config);
 
     info!("Starting server...");
     info!("Press Ctrl+C to stop");
 
-    // Handle shutdown signal
-    let shutdown = tokio::signal::ctrl_c();
-
-    tokio::select! {
-        result = server.start() => {
-            if let Err(e) = result {
-                warn!("Server error: {}", e);
-            }
-        }
-        _ = shutdown => {
-            info!("Shutdown signal received");
-            server.shutdown().await?;
-        }
-    }
+    // server.start() consumes and wraps in Arc internally;
+    // shutdown via signal is handled in Unit 8 (graceful shutdown)
+    server.start().await?;
 
     Ok(())
 }
