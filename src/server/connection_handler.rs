@@ -13,6 +13,7 @@ use tokio::sync::{RwLock, mpsc};
 use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
+use crate::auth::AuthValidator;
 use crate::current_timestamp;
 use crate::error::{ChatError, Result};
 use crate::protocol::codec::{Decodable, Encodable};
@@ -167,6 +168,9 @@ pub struct ConnectionHandler {
     /// Underlying QUIC connection
     connection: Connection,
 
+    /// JWT authentication validator
+    auth_validator: Arc<AuthValidator>,
+
     /// User ID (set after authentication)
     user_id: RwLock<Option<UserId>>,
 
@@ -221,6 +225,7 @@ impl ConnectionHandler {
     pub fn new(
         connection: Connection,
         config: StreamConfig,
+        auth_validator: Arc<AuthValidator>,
         shard_router: Arc<ShardRouter>,
         event_tx: mpsc::Sender<ServerEvent>,
         command_rx: mpsc::Receiver<ConnectionCommand>,
@@ -232,6 +237,7 @@ impl ConnectionHandler {
 
         Self {
             connection,
+            auth_validator,
             user_id: RwLock::new(None),
             username: RwLock::new(None),
             handshake_state: RwLock::new(HandshakeState::AwaitingHello),
@@ -464,41 +470,56 @@ impl ConnectionHandler {
 
                 debug!("Received Auth method={}", auth.method);
 
-                // Simple auth for now - accept any username
-                // In production, validate token/credentials here
-                let (user_id, username) = self.authenticate(&auth).await?;
+                match self.authenticate(&auth) {
+                    Ok((user_id, username)) => {
+                        // Store user info
+                        *self.user_id.write().await = Some(user_id);
+                        *self.username.write().await = Some(username.clone());
 
-                // Store user info
-                *self.user_id.write().await = Some(user_id);
-                *self.username.write().await = Some(username.clone());
+                        // Get user's rooms (populated by NATS in Unit 5)
+                        let rooms = vec![];
 
-                // Get user's rooms (would come from database in production)
-                let rooms = vec![]; // Empty for now
+                        // Send AuthOk
+                        let auth_ok = AuthOk {
+                            user_id,
+                            username: username.clone(),
+                            rooms,
+                        };
+                        self.send_control_frame(&auth_ok).await?;
 
-                // Send AuthOk
-                let auth_ok = AuthOk {
-                    user_id,
-                    username: username.clone(),
-                    rooms,
-                };
-                self.send_control_frame(&auth_ok).await?;
+                        // Update state
+                        *self.handshake_state.write().await = HandshakeState::Authenticated;
 
-                // Update state
-                *self.handshake_state.write().await = HandshakeState::Authenticated;
+                        // Open shard streams for the client
+                        self.open_shard_streams().await?;
 
-                // Open shard streams for the client
-                self.open_shard_streams().await?;
+                        // Notify server
+                        let _ = self
+                            .event_tx
+                            .send(ServerEvent::Authenticated { user_id, username });
 
-                // Notify server
-                let _ = self
-                    .event_tx
-                    .send(ServerEvent::Authenticated { user_id, username });
-
-                info!(
-                    "User {} authenticated from {}",
-                    user_id,
-                    self.remote_address()
-                );
+                        info!(
+                            "User {} authenticated from {}",
+                            user_id,
+                            self.remote_address()
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Authentication failed from {}: {}",
+                            self.remote_address(),
+                            e
+                        );
+                        // Send AuthFailed frame before closing
+                        let auth_failed = AuthFailed {
+                            code: 401,
+                            message: e.message().to_string(),
+                        };
+                        let _ = self.send_control_frame(&auth_failed).await;
+                        self.connection.close(1u32.into(), b"auth failed");
+                        return Err(e);
+                    }
+                }
             }
 
             // Ping/Pong
@@ -546,17 +567,23 @@ impl ConnectionHandler {
         Ok(())
     }
 
-    /// Authenticate user (simplified - in production, validate tokens)
-    async fn authenticate(&self, auth: &Auth) -> Result<(UserId, String)> {
+    /// Authenticate a client from an `Auth` frame.
+    ///
+    /// - `"token"`: validates the JWT bearer token via `AuthValidator`.
+    /// - `"username"`: dev-only hashed username, no real security.
+    fn authenticate(&self, auth: &Auth) -> Result<(UserId, String)> {
         match auth.method.as_str() {
+            "token" => {
+                let claims = self.auth_validator.validate(&auth.credentials)?;
+                let user_id = claims.user_id()?;
+                Ok((user_id, claims.username))
+            }
             "username" => {
-                // Simple username auth - generate user ID
+                // Dev-only: accept any non-empty username and derive a stable user ID.
                 let username = auth.credentials.trim().to_string();
                 if username.is_empty() || username.len() > 50 {
                     return Err(ChatError::auth("Invalid username"));
                 }
-
-                // Generate a user ID (in production, look up from database)
                 let user_id = {
                     use std::collections::hash_map::DefaultHasher;
                     use std::hash::{Hash, Hasher};
@@ -564,16 +591,10 @@ impl ConnectionHandler {
                     username.hash(&mut hasher);
                     hasher.finish()
                 };
-
                 Ok((user_id, username))
             }
-            "token" => {
-                // Token auth - would validate JWT or similar
-                // For now, just reject
-                Err(ChatError::auth("Token auth not implemented"))
-            }
             _ => Err(ChatError::auth(format!(
-                "Unknown auth method: {}",
+                "Unknown auth method '{}': use 'token' or 'username'",
                 auth.method
             ))),
         }
@@ -1204,6 +1225,7 @@ impl ConnectionHandler {
 /// Builder for ConnectionHandler
 pub struct ConnectionHandlerBuilder {
     config: StreamConfig,
+    auth_validator: Option<Arc<AuthValidator>>,
     shard_router: Option<Arc<ShardRouter>>,
 }
 
@@ -1211,12 +1233,18 @@ impl ConnectionHandlerBuilder {
     pub fn new() -> Self {
         Self {
             config: StreamConfig::default(),
+            auth_validator: None,
             shard_router: None,
         }
     }
 
     pub fn with_config(mut self, config: StreamConfig) -> Self {
         self.config = config;
+        self
+    }
+
+    pub fn with_auth_validator(mut self, validator: Arc<AuthValidator>) -> Self {
+        self.auth_validator = Some(validator);
         self
     }
 
@@ -1235,7 +1263,20 @@ impl ConnectionHandlerBuilder {
             .shard_router
             .unwrap_or_else(|| Arc::new(ShardRouter::with_defaults()));
 
-        ConnectionHandler::new(connection, self.config, shard_router, event_tx, command_rx)
+        let auth_validator = self.auth_validator.unwrap_or_else(|| {
+            Arc::new(AuthValidator::new_hs256(
+                b"garou-dev-only-insecure-secret-do-not-use-in-production",
+            ))
+        });
+
+        ConnectionHandler::new(
+            connection,
+            self.config,
+            auth_validator,
+            shard_router,
+            event_tx,
+            command_rx,
+        )
     }
 }
 

@@ -14,6 +14,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, error, info, warn};
 
+use crate::auth::AuthValidator;
 use crate::config::Config;
 use crate::current_timestamp;
 use crate::error::{ChatError, Result};
@@ -74,6 +75,8 @@ pub struct MultiStreamServer {
     config: ServerConfig,
     /// QUIC endpoint
     endpoint: Option<Endpoint>,
+    /// JWT authentication validator
+    auth_validator: Arc<AuthValidator>,
     /// Room manager
     room_manager: Arc<RoomManager>,
     /// Shard router
@@ -87,14 +90,15 @@ pub struct MultiStreamServer {
 }
 
 impl MultiStreamServer {
-    /// Create a new multi-stream server
-    pub fn new(config: ServerConfig) -> Self {
+    /// Create a new multi-stream server with an explicit auth validator.
+    pub fn new(config: ServerConfig, auth_validator: Arc<AuthValidator>) -> Self {
         let shard_router = Arc::new(ShardRouter::new(config.shard_config.clone()));
         let room_manager = Arc::new(RoomManager::new());
 
         Self {
             config,
             endpoint: None,
+            auth_validator,
             room_manager,
             shard_router,
             connections: Arc::new(RwLock::new(HashMap::new())),
@@ -127,12 +131,17 @@ impl MultiStreamServer {
             enable_datagrams: cfg.server.enable_datagrams,
         };
 
-        Ok(Self::new(server_config))
+        let auth_validator = Arc::new(AuthValidator::from_config(&cfg.auth)?);
+
+        Ok(Self::new(server_config, auth_validator))
     }
 
-    /// Create with default configuration
+    /// Create with default configuration and a dev-only auth validator.
     pub fn with_defaults() -> Self {
-        Self::new(ServerConfig::default())
+        let auth_validator = Arc::new(AuthValidator::new_hs256(
+            b"garou-dev-only-insecure-secret-do-not-use-in-production",
+        ));
+        Self::new(ServerConfig::default(), auth_validator)
     }
 
     /// Get the room manager
@@ -270,6 +279,7 @@ impl MultiStreamServer {
         let handler = Arc::new(ConnectionHandler::new(
             connection,
             self.config.stream_config.clone(),
+            Arc::clone(&self.auth_validator),
             Arc::clone(&self.shard_router),
             event_tx,
             command_rx,

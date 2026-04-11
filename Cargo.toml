@@ -17,6 +17,7 @@ rcgen = "0.12"
 bytes = "1.5"
 toml = "0.8"
 flatbuffers = "24"
+jsonwebtoken = "9.3"
 
 [features]
 # Enable JSON wire format instead of FlatBuffers (development/debug only).

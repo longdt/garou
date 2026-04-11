@@ -30,11 +30,15 @@
 //! ```
 
 // Core modules
+pub mod auth;
 pub mod config;
 pub mod error;
 pub mod protocol;
 pub mod server;
 pub mod transport;
+
+// Re-export auth types
+pub use auth::{AuthClaims, AuthValidator};
 
 // Re-export config types
 pub use config::Config;

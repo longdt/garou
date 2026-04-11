@@ -50,7 +50,8 @@ async fn example_default_server() -> Result<(), Box<dyn std::error::Error>> {
     info!("  Number of shards: {}", config.shard_config.num_shards);
 
     // Create server (but don't start it in this example)
-    let server = MultiStreamServer::new(config);
+    let _ = config; // config consumed via with_defaults for this example
+    let server = MultiStreamServer::with_defaults();
     let stats = server.get_stats().await;
 
     info!("Server created:");
@@ -208,8 +209,7 @@ fn example_shard_config() {
 /// To actually run the server, uncomment and use this function
 #[allow(dead_code)]
 async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
-    let config = ServerConfig::default();
-    let server = MultiStreamServer::new(config);
+    let server = MultiStreamServer::with_defaults();
 
     info!("Starting server...");
     info!("Press Ctrl+C to stop");
