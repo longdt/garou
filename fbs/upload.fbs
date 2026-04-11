@@ -1,0 +1,34 @@
+// Upload messages (frame types 0x70 – 0x7F).
+namespace garou;
+
+table UploadStart {
+  room_id:   ulong;
+  filename:  string;
+  mime_type: string;
+  size:      ulong;
+  checksum:  string;
+}
+
+table UploadChunk {
+  upload_id: ulong;
+  offset:    ulong;
+  size:      uint;
+}
+
+table UploadComplete {
+  upload_id: ulong;
+}
+
+table UploadCancel {
+  upload_id: ulong;
+  reason:    string;
+}
+
+table UploadAck {
+  upload_id:      ulong;
+  bytes_received: ulong;
+  has_url:        bool;
+  url:            string;
+}
+
+root_type UploadAck;

@@ -30,7 +30,8 @@
 | Units Generation | COMPLETED |
 | Code Generation Unit 1 | COMPLETED |
 | Code Generation Unit 2 | COMPLETED |
-| Code Generation Unit 3-9 | PENDING |
+| Code Generation Unit 3 | COMPLETED |
+| Code Generation Unit 4-9 | PENDING |
 | Build and Test | PENDING |
 
 ## Extension Configuration

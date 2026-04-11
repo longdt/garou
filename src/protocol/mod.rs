@@ -7,6 +7,7 @@
 
 pub mod codec;
 pub mod frame;
+pub mod generated;
 pub mod messages;
 
 // Re-export commonly used types

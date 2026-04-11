@@ -1,0 +1,73 @@
+// Room messages (server → client, frame types 0x30 – 0x4F).
+include "common.fbs";
+
+namespace garou;
+
+table RoomMessage {
+  message_id:  ulong;
+  room_id:     ulong;
+  sender:      UserInfo;
+  content:     string;
+  timestamp:   ulong;
+  has_reply_to: bool;
+  reply_to:    ulong;
+  attachments: [string];
+  has_nonce:   bool;
+  nonce:       string;
+}
+
+table RoomMessageEdited {
+  message_id: ulong;
+  room_id:    ulong;
+  editor_id:  ulong;
+  content:    string;
+  edited_at:  ulong;
+}
+
+table RoomMessageDeleted {
+  message_id: ulong;
+  room_id:    ulong;
+  deleted_by: ulong;
+  deleted_at: ulong;
+}
+
+table RoomReactionAdded {
+  message_id: ulong;
+  room_id:    ulong;
+  user_id:    ulong;
+  emoji:      string;
+}
+
+table RoomReactionRemoved {
+  message_id: ulong;
+  room_id:    ulong;
+  user_id:    ulong;
+  emoji:      string;
+}
+
+table RoomUserJoined {
+  room_id:   ulong;
+  user:      UserInfo;
+  joined_at: ulong;
+}
+
+table RoomUserLeft {
+  room_id: ulong;
+  user_id: ulong;
+  left_at: ulong;
+}
+
+table RoomInit {
+  room_id:         ulong;
+  name:            string;
+  room_type:       string;
+  members:         [UserInfo];
+  recent_messages: [RoomMessage];
+}
+
+table RoomClose {
+  room_id: ulong;
+  reason:  string;
+}
+
+root_type RoomMessage;

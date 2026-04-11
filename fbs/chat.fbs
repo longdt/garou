@@ -1,0 +1,46 @@
+// Chat command messages (client → server, frame types 0x10 – 0x2F).
+namespace garou;
+
+table SendMessage {
+  room_id:     ulong;
+  content:     string;
+  nonce:       string;
+  has_reply_to: bool;
+  reply_to:    ulong;
+  attachments: [ulong];  // upload IDs
+}
+
+table EditMessage {
+  message_id: ulong;
+  content:    string;
+}
+
+table DeleteMessage {
+  message_id: ulong;
+}
+
+table AddReaction {
+  message_id: ulong;
+  emoji:      string;
+}
+
+table RemoveReaction {
+  message_id: ulong;
+  emoji:      string;
+}
+
+table JoinRoom {
+  room_id: ulong;
+}
+
+table LeaveRoom {
+  room_id: ulong;
+}
+
+table CreateRoom {
+  name:      string;
+  room_type: string;
+  members:   [ulong];
+}
+
+root_type SendMessage;

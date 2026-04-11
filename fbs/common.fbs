@@ -1,0 +1,11 @@
+// Common shared types used across multiple schema files.
+namespace garou;
+
+/// User information embedded in room events
+table UserInfo {
+  user_id:   ulong;
+  username:  string;
+  avatar_url: string;  // absent = no avatar
+}
+
+root_type UserInfo;

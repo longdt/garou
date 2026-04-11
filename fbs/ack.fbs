@@ -1,0 +1,22 @@
+// ACK messages (frame types 0x60 – 0x6F).
+namespace garou;
+
+table MessageDelivered {
+  message_id:   ulong;
+  room_id:      ulong;
+  delivered_at: ulong;
+}
+
+table MessageRead {
+  message_id: ulong;
+  room_id:    ulong;
+  read_at:    ulong;
+}
+
+table MessageAck {
+  nonce:      string;
+  message_id: ulong;
+  timestamp:  ulong;
+}
+
+root_type MessageAck;

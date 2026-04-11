@@ -1,0 +1,23 @@
+// Shard management messages (frame types 0x50 – 0x5F).
+namespace garou;
+
+table ShardStreamInfo {
+  shard_id: ubyte;
+  room_ids: [ulong];
+}
+
+table ShardAssignment {
+  shard_streams: [ShardStreamInfo];
+}
+
+table RoomPromoted {
+  room_id:    ulong;
+  from_shard: ubyte;
+}
+
+table RoomDemoted {
+  room_id:  ulong;
+  to_shard: ubyte;
+}
+
+root_type ShardAssignment;

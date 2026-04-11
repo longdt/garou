@@ -1,0 +1,55 @@
+// Control messages (frame types 0x00 – 0x0F).
+namespace garou;
+
+table Hello {
+  version:      uint;
+  capabilities: [string];
+}
+
+table HelloAck {
+  version:    uint;
+  session_id: string;
+  num_shards: ubyte;
+}
+
+table Auth {
+  method:      string;
+  credentials: string;
+}
+
+table AuthOk {
+  user_id:  ulong;
+  username: string;
+  rooms:    [ulong];
+}
+
+table AuthFailed {
+  code:    uint;
+  message: string;
+}
+
+table Ping {
+  timestamp: ulong;
+}
+
+table Pong {
+  timestamp: ulong;
+}
+
+table Throttle {
+  has_room_id: bool;
+  room_id:     ulong;
+  delay_ms:    uint;
+  reason:      string;
+}
+
+table Goodbye {
+  reason: string;
+}
+
+table ServerCommand {
+  command: string;
+  params:  string;  // JSON-encoded arbitrary params
+}
+
+root_type Hello;

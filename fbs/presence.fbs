@@ -1,0 +1,32 @@
+// Presence / datagram messages (frame types 0x80 – 0x8F).
+namespace garou;
+
+table Typing {
+  room_id:     ulong;
+  has_user_id: bool;
+  user_id:     ulong;
+}
+
+table StopTyping {
+  room_id:     ulong;
+  has_user_id: bool;
+  user_id:     ulong;
+}
+
+table PresenceOnline {
+  user_id:    ulong;
+  has_status: bool;
+  status:     string;
+}
+
+table PresenceOffline {
+  user_id:   ulong;
+  last_seen: ulong;
+}
+
+table PresenceAway {
+  user_id:    ulong;
+  away_since: ulong;
+}
+
+root_type Typing;

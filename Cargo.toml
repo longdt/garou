@@ -16,3 +16,8 @@ anyhow = "1.0"
 rcgen = "0.12"
 bytes = "1.5"
 toml = "0.8"
+flatbuffers = "24"
+
+[features]
+# Enable JSON wire format instead of FlatBuffers (development/debug only).
+debug-json = []

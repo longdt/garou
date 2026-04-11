@@ -1,0 +1,11 @@
+// Error message (frame type 0xFF).
+namespace garou;
+
+table Error {
+  code:        uint;
+  message:     string;
+  has_context: bool;
+  context:     string;
+}
+
+root_type Error;
