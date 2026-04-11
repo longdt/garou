@@ -30,10 +30,14 @@
 //! ```
 
 // Core modules
+pub mod config;
 pub mod error;
 pub mod protocol;
 pub mod server;
 pub mod transport;
+
+// Re-export config types
+pub use config::Config;
 
 // Re-export error types
 pub use error::{ChatError, Result};

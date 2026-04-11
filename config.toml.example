@@ -1,0 +1,104 @@
+# Garou QUIC Chat Server — Example Configuration
+# Copy this file to config.toml and adjust values for your environment.
+# All fields are optional and fall back to the documented defaults.
+
+# ---------------------------------------------------------------------------
+# Server
+# ---------------------------------------------------------------------------
+[server]
+# Socket address to bind (host:port). Default: "0.0.0.0:4433"
+bind_addr = "0.0.0.0:4433"
+
+# Maximum simultaneous QUIC connections. Default: 10000
+max_connections = 10000
+
+# Connection idle timeout in seconds. Default: 300 (5 minutes)
+idle_timeout_secs = 300
+
+# Enable QUIC datagrams for typing indicators and presence. Default: true
+enable_datagrams = true
+
+# Graceful shutdown drain window in seconds (K8s terminationGracePeriodSeconds
+# should be >= this value). Default: 30
+shutdown_timeout_secs = 30
+
+# ---------------------------------------------------------------------------
+# Authentication (JWT)
+# ---------------------------------------------------------------------------
+[auth]
+# Secret key for HS256 JWT validation. Required for auth to work.
+# Example: generate with `openssl rand -hex 32`
+jwt_secret = "change_me_before_production"
+
+# Path to RSA/EC public key file for RS256/ES256. When set, overrides jwt_secret.
+# jwt_public_key_path = "/etc/garou/jwt_public.pem"
+
+# JWT algorithm: "HS256" or "RS256". Default: "HS256"
+jwt_algorithm = "HS256"
+
+# ---------------------------------------------------------------------------
+# NATS JetStream (message persistence & cross-node pub/sub)
+# ---------------------------------------------------------------------------
+[nats]
+# NATS server URL. Default: "nats://localhost:4222"
+url = "nats://localhost:4222"
+
+# JetStream stream name for chat messages. Default: "GAROU_CHAT"
+stream_name = "GAROU_CHAT"
+
+# Maximum messages retained across all subjects. Default: 1000000
+max_messages = 1000000
+
+# Maximum age of retained messages in seconds. 0 = unlimited. Default: 0
+max_age_secs = 0
+
+# ---------------------------------------------------------------------------
+# Redis (JWT cache, presence, room roster)
+# ---------------------------------------------------------------------------
+[redis]
+# Redis connection URL. Default: "redis://localhost:6379"
+url = "redis://localhost:6379"
+
+# Connection pool size. Default: 16
+pool_size = 16
+
+# JWT claim cache TTL in seconds. 0 = use token's own `exp` claim. Default: 0
+jwt_cache_ttl_secs = 0
+
+# ---------------------------------------------------------------------------
+# Metrics & Health
+# ---------------------------------------------------------------------------
+[metrics]
+# HTTP bind address for /metrics (Prometheus) and /health/* endpoints.
+# Default: "0.0.0.0:9090"
+bind_addr = "0.0.0.0:9090"
+
+# ---------------------------------------------------------------------------
+# Shard routing
+# ---------------------------------------------------------------------------
+[shard]
+# Number of shard streams per client connection. Default: 8
+num_shards = 8
+
+# Messages/sec at which a room is promoted to its own hot stream. Default: 100
+hot_room_threshold = 100
+
+# Messages/sec below which a hot room is demoted back to a shard. Default: 20
+cool_down_threshold = 20
+
+# Seconds to wait before demoting a hot room. Default: 60
+cool_down_period_secs = 60
+
+# Maximum hot rooms per client connection. Default: 10
+max_hot_rooms = 10
+
+# Rate calculation window in seconds. Default: 10
+rate_window_secs = 10
+
+# ---------------------------------------------------------------------------
+# Protocol
+# ---------------------------------------------------------------------------
+[protocol]
+# Enable JSON debug mode (uses JSON encoding instead of FlatBuffers).
+# Only for development. Default: false
+debug_json = false

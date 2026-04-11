@@ -14,6 +14,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, error, info, warn};
 
+use crate::config::Config;
 use crate::current_timestamp;
 use crate::error::{ChatError, Result};
 use crate::protocol::messages::*;
@@ -100,6 +101,33 @@ impl MultiStreamServer {
             user_connections: Arc::new(RwLock::new(HashMap::new())),
             next_message_id: Arc::new(AtomicU64::new(1)),
         }
+    }
+
+    /// Create from application-level `Config`.
+    pub fn from_config(cfg: &Config) -> Result<Self> {
+        let bind_addr: SocketAddr = cfg.server.bind_addr.parse().map_err(|e| {
+            ChatError::Config(format!("invalid server.bind_addr: {}", e))
+        })?;
+
+        let shard_config = ShardConfig {
+            num_shards: cfg.shard.num_shards,
+            hot_room_threshold: cfg.shard.hot_room_threshold,
+            cool_down_threshold: cfg.shard.cool_down_threshold,
+            cool_down_period_secs: cfg.shard.cool_down_period_secs,
+            max_hot_rooms: cfg.shard.max_hot_rooms,
+            rate_window_secs: cfg.shard.rate_window_secs,
+        };
+
+        let server_config = ServerConfig {
+            bind_addr,
+            max_connections: cfg.server.max_connections,
+            stream_config: StreamConfig::default(),
+            shard_config,
+            idle_timeout: cfg.idle_timeout(),
+            enable_datagrams: cfg.server.enable_datagrams,
+        };
+
+        Ok(Self::new(server_config))
     }
 
     /// Create with default configuration
