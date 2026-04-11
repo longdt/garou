@@ -92,7 +92,7 @@ Client sends SendMessage frame on ChatCommands stream
 | TLS | Rustls + ring | 0.23 |
 | Serialization | serde_json | 1.x |
 | Logging | tracing + tracing-subscriber | 0.1 |
-| Unique IDs | UUID v4 | 1.10 |
+| Unique IDs | UUID v7 | 1.10 |
 | TLS Cert Gen | rcgen | 0.12 |
 | Byte buffers | bytes | 1.5 |
 | Error handling | anyhow | 1.0 |

@@ -231,7 +231,7 @@ impl ConnectionHandler {
         command_rx: mpsc::Receiver<ConnectionCommand>,
     ) -> Self {
         let num_shards = config.num_shards as usize;
-        let session_id = uuid::Uuid::new_v4().to_string();
+        let session_id = uuid::Uuid::now_v7().to_string();
 
         let shard_sends_vec: Vec<Option<SendStream>> = (0..num_shards).map(|_| None).collect();
 
@@ -574,7 +574,10 @@ impl ConnectionHandler {
     async fn authenticate(&self, auth: &Auth) -> Result<(UserId, String)> {
         match auth.method.as_str() {
             "token" => {
-                let claims = self.auth_validator.validate_async(&auth.credentials).await?;
+                let claims = self
+                    .auth_validator
+                    .validate_async(&auth.credentials)
+                    .await?;
                 let user_id = claims.user_id()?;
                 Ok((user_id, claims.username))
             }

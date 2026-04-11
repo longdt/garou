@@ -68,7 +68,10 @@ impl RoomSubscription {
             {
                 Some(id) => id,
                 None => {
-                    warn!("NATS message missing Room-Id header on subject {}", msg.subject);
+                    warn!(
+                        "NATS message missing Room-Id header on subject {}",
+                        msg.subject
+                    );
                     continue;
                 }
             };
@@ -134,9 +137,7 @@ impl NatsClient {
                 ..Default::default()
             })
             .await
-            .map_err(|e| {
-                ChatError::Internal(format!("NATS stream init failed: {}", e))
-            })?;
+            .map_err(|e| ChatError::Internal(format!("NATS stream init failed: {}", e)))?;
 
         // Create / open the metadata KV bucket (room states + msg→room map)
         let meta_kv = jetstream
@@ -147,8 +148,12 @@ impl NatsClient {
             .await
             .map_err(|e| ChatError::Internal(format!("NATS KV init failed: {}", e)))?;
 
-        let server_id = uuid::Uuid::new_v4().to_string();
-        info!("NATS connected (stream={}, server_id={})", stream_name, &server_id[..8]);
+        let server_id = uuid::Uuid::now_v7().to_string();
+        info!(
+            "NATS connected (stream={}, server_id={})",
+            stream_name,
+            &server_id[..8]
+        );
 
         Ok(Self {
             client,
@@ -202,11 +207,7 @@ impl NatsClient {
     ///
     /// Returns an empty Vec (not an error) if the room has no history or
     /// the stream is unreachable.
-    pub async fn get_history(
-        &self,
-        room_id: RoomId,
-        limit: usize,
-    ) -> Result<Vec<RoomMessage>> {
+    pub async fn get_history(&self, room_id: RoomId, limit: usize) -> Result<Vec<RoomMessage>> {
         let stream = self
             .jetstream
             .get_stream(&self.stream_name)
@@ -250,7 +251,11 @@ impl NatsClient {
             }
         }
 
-        debug!("Replayed {} messages for room {} from NATS", messages.len(), room_id);
+        debug!(
+            "Replayed {} messages for room {} from NATS",
+            messages.len(),
+            room_id
+        );
         Ok(messages)
     }
 
@@ -260,11 +265,7 @@ impl NatsClient {
 
     /// Store a message_id → room_id mapping so edit/delete/reaction handlers
     /// can look up the room without an explicit `room_id` parameter.
-    pub async fn save_message_room(
-        &self,
-        message_id: MessageId,
-        room_id: RoomId,
-    ) -> Result<()> {
+    pub async fn save_message_room(&self, message_id: MessageId, room_id: RoomId) -> Result<()> {
         let key = format!("msg.{}", message_id);
         self.meta_kv
             .put(key, room_id.to_string().into())
@@ -275,16 +276,16 @@ impl NatsClient {
 
     /// Look up the room ID for a message. Returns `None` if the mapping does
     /// not exist (e.g., message predates NATS integration).
-    pub async fn get_room_id_for_message(
-        &self,
-        message_id: MessageId,
-    ) -> Result<Option<RoomId>> {
+    pub async fn get_room_id_for_message(&self, message_id: MessageId) -> Result<Option<RoomId>> {
         let key = format!("msg.{}", message_id);
         match self.meta_kv.get(key).await {
             Ok(Some(entry)) => {
                 let s = String::from_utf8_lossy(&entry);
                 let room_id = s.parse::<RoomId>().map_err(|_| {
-                    ChatError::Internal(format!("invalid room_id in KV for msg {}: '{}'", message_id, s))
+                    ChatError::Internal(format!(
+                        "invalid room_id in KV for msg {}: '{}'",
+                        message_id, s
+                    ))
                 })?;
                 Ok(Some(room_id))
             }
@@ -320,7 +321,10 @@ impl NatsClient {
                 Ok(Some(state))
             }
             Ok(None) => Ok(None),
-            Err(e) => Err(ChatError::Internal(format!("NATS KV get room state: {}", e))),
+            Err(e) => Err(ChatError::Internal(format!(
+                "NATS KV get room state: {}",
+                e
+            ))),
         }
     }
 

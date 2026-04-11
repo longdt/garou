@@ -119,9 +119,11 @@ impl MultiStreamServer {
     ///
     /// Async because it optionally connects to NATS (failures are non-fatal).
     pub async fn from_config(cfg: &Config) -> Result<Self> {
-        let bind_addr: SocketAddr = cfg.server.bind_addr.parse().map_err(|e| {
-            ChatError::Config(format!("invalid server.bind_addr: {}", e))
-        })?;
+        let bind_addr: SocketAddr = cfg
+            .server
+            .bind_addr
+            .parse()
+            .map_err(|e| ChatError::Config(format!("invalid server.bind_addr: {}", e)))?;
 
         let shard_config = ShardConfig {
             num_shards: cfg.shard.num_shards,
@@ -143,12 +145,7 @@ impl MultiStreamServer {
 
         // Attempt Redis connection; non-fatal if unavailable
         let redis_client: Option<Arc<RedisClient>> = if !cfg.redis.url.is_empty() {
-            match RedisClient::connect(
-                &cfg.redis.url,
-                cfg.redis.jwt_cache_ttl_secs,
-            )
-            .await
-            {
+            match RedisClient::connect(&cfg.redis.url, cfg.redis.jwt_cache_ttl_secs).await {
                 Ok(client) => {
                     info!("Connected to Redis at {}", cfg.redis.url);
                     Some(Arc::new(client))
@@ -296,7 +293,10 @@ impl MultiStreamServer {
             }
         };
 
-        info!("NATS cross-node subscription active (server_id={})", &nats.server_id()[..8]);
+        info!(
+            "NATS cross-node subscription active (server_id={})",
+            &nats.server_id()[..8]
+        );
 
         loop {
             match subscription.next().await {
@@ -350,7 +350,7 @@ impl MultiStreamServer {
     async fn handle_incoming(self: &Arc<Self>, incoming: quinn::Incoming) -> Result<()> {
         let connection = incoming.await?;
         let remote_addr = connection.remote_address();
-        let conn_id = uuid::Uuid::new_v4().to_string();
+        let conn_id = uuid::Uuid::now_v7().to_string();
 
         debug!("New connection {} from {}", conn_id, remote_addr);
 
@@ -411,11 +411,7 @@ impl MultiStreamServer {
     }
 
     /// Process events from a connection
-    async fn process_events(
-        &self,
-        conn_id: String,
-        mut event_rx: mpsc::Receiver<ServerEvent>,
-    ) {
+    async fn process_events(&self, conn_id: String, mut event_rx: mpsc::Receiver<ServerEvent>) {
         while let Some(event) = event_rx.recv().await {
             if let Err(e) = self.handle_event(&conn_id, event).await {
                 warn!("Event handling error for {}: {}", conn_id, e);
@@ -788,7 +784,10 @@ impl MultiStreamServer {
                 None
             }
             Err(e) => {
-                warn!("NATS room_id lookup failed for message {}: {}", message_id, e);
+                warn!(
+                    "NATS room_id lookup failed for message {}: {}",
+                    message_id, e
+                );
                 None
             }
         }
@@ -805,7 +804,10 @@ impl MultiStreamServer {
         let room_id = match self.room_id_for_message(message_id).await {
             Some(id) => id,
             None => {
-                debug!("Dropping EditMessage for {} — room_id unavailable (NATS required)", message_id);
+                debug!(
+                    "Dropping EditMessage for {} — room_id unavailable (NATS required)",
+                    message_id
+                );
                 return Ok(());
             }
         };
@@ -832,7 +834,10 @@ impl MultiStreamServer {
         let room_id = match self.room_id_for_message(message_id).await {
             Some(id) => id,
             None => {
-                debug!("Dropping DeleteMessage for {} — room_id unavailable", message_id);
+                debug!(
+                    "Dropping DeleteMessage for {} — room_id unavailable",
+                    message_id
+                );
                 return Ok(());
             }
         };
@@ -844,8 +849,12 @@ impl MultiStreamServer {
             deleted_at: current_timestamp(),
         };
 
-        self.broadcast_to_room(room_id, ConnectionCommand::SendMessageDeleted(deleted), None)
-            .await
+        self.broadcast_to_room(
+            room_id,
+            ConnectionCommand::SendMessageDeleted(deleted),
+            None,
+        )
+        .await
     }
 
     /// Handle adding a reaction (BUG-001 fixed: room_id from NATS KV).
@@ -859,7 +868,10 @@ impl MultiStreamServer {
         let room_id = match self.room_id_for_message(message_id).await {
             Some(id) => id,
             None => {
-                debug!("Dropping AddReaction for {} — room_id unavailable", message_id);
+                debug!(
+                    "Dropping AddReaction for {} — room_id unavailable",
+                    message_id
+                );
                 return Ok(());
             }
         };
@@ -871,8 +883,12 @@ impl MultiStreamServer {
             emoji,
         };
 
-        self.broadcast_to_room(room_id, ConnectionCommand::SendReactionAdded(reaction), None)
-            .await
+        self.broadcast_to_room(
+            room_id,
+            ConnectionCommand::SendReactionAdded(reaction),
+            None,
+        )
+        .await
     }
 
     /// Handle removing a reaction (BUG-001 fixed: room_id from NATS KV).
@@ -886,7 +902,10 @@ impl MultiStreamServer {
         let room_id = match self.room_id_for_message(message_id).await {
             Some(id) => id,
             None => {
-                debug!("Dropping RemoveReaction for {} — room_id unavailable", message_id);
+                debug!(
+                    "Dropping RemoveReaction for {} — room_id unavailable",
+                    message_id
+                );
                 return Ok(());
             }
         };
@@ -898,8 +917,12 @@ impl MultiStreamServer {
             emoji,
         };
 
-        self.broadcast_to_room(room_id, ConnectionCommand::SendReactionRemoved(reaction), None)
-            .await
+        self.broadcast_to_room(
+            room_id,
+            ConnectionCommand::SendReactionRemoved(reaction),
+            None,
+        )
+        .await
     }
 
     /// Handle creating a room
@@ -926,7 +949,10 @@ impl MultiStreamServer {
         };
 
         let creator = RoomMember::new(user_id, username);
-        let room = self.room_manager.create_room(name.clone(), rt, creator).await;
+        let room = self
+            .room_manager
+            .create_room(name.clone(), rt, creator)
+            .await;
 
         // Add other members
         for member_id in &members {
