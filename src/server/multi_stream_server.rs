@@ -21,6 +21,8 @@ use crate::error::{ChatError, Result};
 use crate::protocol::messages::*;
 use crate::server::connection_handler::{ConnectionCommand, ConnectionHandler, ServerEvent};
 use crate::server::room_manager::{RoomManager, RoomMember, RoomType};
+use crate::storage::nats::{NatsClient, RoomState};
+use crate::storage::redis::RedisClient;
 use crate::transport::shards::{ShardConfig, ShardRouter};
 use crate::transport::streams::StreamConfig;
 
@@ -77,6 +79,10 @@ pub struct MultiStreamServer {
     endpoint: Option<Endpoint>,
     /// JWT authentication validator
     auth_validator: Arc<AuthValidator>,
+    /// NATS JetStream client (optional — server works without it)
+    nats_client: Option<Arc<NatsClient>>,
+    /// Redis client for JWT caching, presence, and room rosters (optional)
+    redis_client: Option<Arc<RedisClient>>,
     /// Room manager
     room_manager: Arc<RoomManager>,
     /// Shard router
@@ -99,6 +105,8 @@ impl MultiStreamServer {
             config,
             endpoint: None,
             auth_validator,
+            nats_client: None,
+            redis_client: None,
             room_manager,
             shard_router,
             connections: Arc::new(RwLock::new(HashMap::new())),
@@ -108,7 +116,9 @@ impl MultiStreamServer {
     }
 
     /// Create from application-level `Config`.
-    pub fn from_config(cfg: &Config) -> Result<Self> {
+    ///
+    /// Async because it optionally connects to NATS (failures are non-fatal).
+    pub async fn from_config(cfg: &Config) -> Result<Self> {
         let bind_addr: SocketAddr = cfg.server.bind_addr.parse().map_err(|e| {
             ChatError::Config(format!("invalid server.bind_addr: {}", e))
         })?;
@@ -131,9 +141,60 @@ impl MultiStreamServer {
             enable_datagrams: cfg.server.enable_datagrams,
         };
 
-        let auth_validator = Arc::new(AuthValidator::from_config(&cfg.auth)?);
+        // Attempt Redis connection; non-fatal if unavailable
+        let redis_client: Option<Arc<RedisClient>> = if !cfg.redis.url.is_empty() {
+            match RedisClient::connect(
+                &cfg.redis.url,
+                cfg.redis.jwt_cache_ttl_secs,
+            )
+            .await
+            {
+                Ok(client) => {
+                    info!("Connected to Redis at {}", cfg.redis.url);
+                    Some(Arc::new(client))
+                }
+                Err(e) => {
+                    warn!(
+                        "Redis unavailable ({}): running without JWT caching / presence",
+                        e
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
-        Ok(Self::new(server_config, auth_validator))
+        // Build auth validator — attach Redis for claim caching if available
+        let auth_validator = Arc::new({
+            let v = AuthValidator::from_config(&cfg.auth)?;
+            if let Some(ref r) = redis_client {
+                v.with_redis_client(Arc::clone(r))
+            } else {
+                v
+            }
+        });
+
+        let mut server = Self::new(server_config, auth_validator);
+        server.redis_client = redis_client;
+
+        // Attempt NATS connection; non-fatal if unavailable
+        if !cfg.nats.url.is_empty() {
+            match NatsClient::connect(&cfg.nats.url, &cfg.nats.stream_name).await {
+                Ok(client) => {
+                    info!("Connected to NATS at {}", cfg.nats.url);
+                    server.nats_client = Some(Arc::new(client));
+                }
+                Err(e) => {
+                    warn!(
+                        "NATS unavailable ({}): running without message persistence",
+                        e
+                    );
+                }
+            }
+        }
+
+        Ok(server)
     }
 
     /// Create with default configuration and a dev-only auth validator.
@@ -212,8 +273,45 @@ impl MultiStreamServer {
         // Wrap in Arc once — all spawned tasks clone this Arc (BUG-002 fix)
         let server = Arc::new(self);
 
+        // Spawn NATS cross-node subscription task (if NATS is available)
+        if let Some(nats) = server.nats_client.as_ref().map(Arc::clone) {
+            let srv = Arc::clone(&server);
+            tokio::spawn(async move {
+                srv.run_nats_subscription(nats).await;
+            });
+        }
+
         // Accept connections
         server.accept_connections(endpoint).await
+    }
+
+    /// Background task: receive messages published by other server nodes via
+    /// NATS Core and broadcast them to locally-connected clients.
+    async fn run_nats_subscription(self: &Arc<Self>, nats: Arc<NatsClient>) {
+        let mut subscription = match nats.subscribe_rooms().await {
+            Ok(s) => s,
+            Err(e) => {
+                error!("NATS room subscription failed: {}", e);
+                return;
+            }
+        };
+
+        info!("NATS cross-node subscription active (server_id={})", &nats.server_id()[..8]);
+
+        loop {
+            match subscription.next().await {
+                Some((room_id, msg)) => {
+                    let cmd = ConnectionCommand::SendRoomMessage(msg);
+                    if let Err(e) = self.broadcast_to_room(room_id, cmd, None).await {
+                        warn!("Cross-node broadcast to room {} failed: {}", room_id, e);
+                    }
+                }
+                None => {
+                    warn!("NATS room subscription closed");
+                    break;
+                }
+            }
+        }
     }
 
     /// Accept incoming connections
@@ -447,6 +545,11 @@ impl MultiStreamServer {
             user_conns.insert(user_id, conn_id.to_string());
         }
 
+        // Update presence in Redis
+        if let Some(ref redis) = self.redis_client {
+            redis.set_presence(user_id, "online").await;
+        }
+
         // Auto-join general room
         self.handle_join_room(conn_id, user_id, 1).await?;
 
@@ -490,9 +593,26 @@ impl MultiStreamServer {
         // Register room with shard router
         self.shard_router.register_room(room_id).await;
 
+        // Update Redis roster
+        if let Some(ref redis) = self.redis_client {
+            redis.add_to_roster(room_id, user_id).await;
+        }
+
         // Send room init to the joining user
         let members = room.get_members().await;
-        let recent_messages = room.get_recent_messages(Some(50)).await;
+        // Prefer NATS history (persisted across restarts); fall back to in-memory
+        let recent_messages = if let Some(nats) = &self.nats_client {
+            match nats.get_history(room_id, 50).await {
+                Ok(msgs) if !msgs.is_empty() => msgs,
+                Ok(_) => room.get_recent_messages(Some(50)).await,
+                Err(e) => {
+                    warn!("NATS history fetch failed for room {}: {}", room_id, e);
+                    room.get_recent_messages(Some(50)).await
+                }
+            }
+        } else {
+            room.get_recent_messages(Some(50)).await
+        };
 
         let room_init = RoomInit {
             room_id,
@@ -540,6 +660,11 @@ impl MultiStreamServer {
     ) -> Result<()> {
         // Leave room
         self.room_manager.leave_room(room_id, user_id).await;
+
+        // Update Redis roster
+        if let Some(ref redis) = self.redis_client {
+            redis.remove_from_roster(room_id, user_id).await;
+        }
 
         // Notify room members
         let user_left = RoomUserLeft {
@@ -607,7 +732,20 @@ impl MultiStreamServer {
             nonce: nonce.clone(),
         };
 
-        // Add to room history
+        // Publish to NATS JetStream first (if available).
+        // Per acceptance criteria: NATS failure → return error, do NOT broadcast.
+        if let Some(nats) = &self.nats_client {
+            nats.publish_message(&room_message)
+                .await
+                .map_err(|e| ChatError::Internal(format!("NATS publish: {}", e)))?;
+
+            // Store message→room mapping for BUG-001 (edit/delete/reaction lookup)
+            if let Err(e) = nats.save_message_room(message_id, room_id).await {
+                warn!("Failed to save message→room mapping in NATS: {}", e);
+            }
+        }
+
+        // Add to in-memory room history
         if let Some(room) = self.room_manager.get_room(room_id).await {
             room.add_message(room_message.clone()).await;
             room.touch_member(user_id).await;
@@ -625,7 +763,7 @@ impl MultiStreamServer {
         self.send_to_connection(conn_id, ConnectionCommand::SendMessageAck(ack))
             .await?;
 
-        // Broadcast to room
+        // Broadcast to local clients (cross-node delivery handled by NATS subscription task)
         self.broadcast_to_room(
             room_id,
             ConnectionCommand::SendRoomMessage(room_message),
@@ -640,56 +778,128 @@ impl MultiStreamServer {
         Ok(())
     }
 
-    /// Handle editing a message
+    /// Look up the room_id for a message from the NATS KV store (BUG-001 fix).
+    async fn room_id_for_message(&self, message_id: MessageId) -> Option<RoomId> {
+        let nats = self.nats_client.as_ref()?;
+        match nats.get_room_id_for_message(message_id).await {
+            Ok(Some(id)) => Some(id),
+            Ok(None) => {
+                warn!("room_id not found in NATS for message {}", message_id);
+                None
+            }
+            Err(e) => {
+                warn!("NATS room_id lookup failed for message {}: {}", message_id, e);
+                None
+            }
+        }
+    }
+
+    /// Handle editing a message (BUG-001 fixed: room_id from NATS KV).
     async fn handle_edit_message(
         &self,
         _conn_id: &str,
-        _user_id: UserId,
-        _message_id: MessageId,
-        _content: String,
+        user_id: UserId,
+        message_id: MessageId,
+        content: String,
     ) -> Result<()> {
-        // TODO(Unit 5): Look up message's room_id from NATS message store by message_id,
-        // then broadcast RoomMessageEdited to that room only.
-        // Placeholder until NATS JetStream integration is complete.
-        Ok(())
+        let room_id = match self.room_id_for_message(message_id).await {
+            Some(id) => id,
+            None => {
+                debug!("Dropping EditMessage for {} — room_id unavailable (NATS required)", message_id);
+                return Ok(());
+            }
+        };
+
+        let edited = RoomMessageEdited {
+            message_id,
+            room_id,
+            editor_id: user_id,
+            content,
+            edited_at: current_timestamp(),
+        };
+
+        self.broadcast_to_room(room_id, ConnectionCommand::SendMessageEdited(edited), None)
+            .await
     }
 
-    /// Handle deleting a message
+    /// Handle deleting a message (BUG-001 fixed: room_id from NATS KV).
     async fn handle_delete_message(
         &self,
         _conn_id: &str,
-        _user_id: UserId,
-        _message_id: MessageId,
+        user_id: UserId,
+        message_id: MessageId,
     ) -> Result<()> {
-        // TODO(Unit 5): Look up message's room_id from NATS message store by message_id,
-        // then broadcast RoomMessageDeleted to that room only.
-        Ok(())
+        let room_id = match self.room_id_for_message(message_id).await {
+            Some(id) => id,
+            None => {
+                debug!("Dropping DeleteMessage for {} — room_id unavailable", message_id);
+                return Ok(());
+            }
+        };
+
+        let deleted = RoomMessageDeleted {
+            message_id,
+            room_id,
+            deleted_by: user_id,
+            deleted_at: current_timestamp(),
+        };
+
+        self.broadcast_to_room(room_id, ConnectionCommand::SendMessageDeleted(deleted), None)
+            .await
     }
 
-    /// Handle adding a reaction
+    /// Handle adding a reaction (BUG-001 fixed: room_id from NATS KV).
     async fn handle_add_reaction(
         &self,
         _conn_id: &str,
-        _user_id: UserId,
-        _message_id: MessageId,
-        _emoji: String,
+        user_id: UserId,
+        message_id: MessageId,
+        emoji: String,
     ) -> Result<()> {
-        // TODO(Unit 5): Look up message's room_id from NATS message store by message_id,
-        // then broadcast RoomReactionAdded to that room only.
-        Ok(())
+        let room_id = match self.room_id_for_message(message_id).await {
+            Some(id) => id,
+            None => {
+                debug!("Dropping AddReaction for {} — room_id unavailable", message_id);
+                return Ok(());
+            }
+        };
+
+        let reaction = RoomReactionAdded {
+            message_id,
+            room_id,
+            user_id,
+            emoji,
+        };
+
+        self.broadcast_to_room(room_id, ConnectionCommand::SendReactionAdded(reaction), None)
+            .await
     }
 
-    /// Handle removing a reaction
+    /// Handle removing a reaction (BUG-001 fixed: room_id from NATS KV).
     async fn handle_remove_reaction(
         &self,
         _conn_id: &str,
-        _user_id: UserId,
-        _message_id: MessageId,
-        _emoji: String,
+        user_id: UserId,
+        message_id: MessageId,
+        emoji: String,
     ) -> Result<()> {
-        // TODO(Unit 5): Look up message's room_id from NATS message store by message_id,
-        // then broadcast RoomReactionRemoved to that room only.
-        Ok(())
+        let room_id = match self.room_id_for_message(message_id).await {
+            Some(id) => id,
+            None => {
+                debug!("Dropping RemoveReaction for {} — room_id unavailable", message_id);
+                return Ok(());
+            }
+        };
+
+        let reaction = RoomReactionRemoved {
+            message_id,
+            room_id,
+            user_id,
+            emoji,
+        };
+
+        self.broadcast_to_room(room_id, ConnectionCommand::SendReactionRemoved(reaction), None)
+            .await
     }
 
     /// Handle creating a room
@@ -716,14 +926,27 @@ impl MultiStreamServer {
         };
 
         let creator = RoomMember::new(user_id, username);
-        let room = self.room_manager.create_room(name, rt, creator).await;
+        let room = self.room_manager.create_room(name.clone(), rt, creator).await;
 
         // Add other members
-        for member_id in members {
-            if member_id != user_id {
-                // Look up member username (would come from user service)
-                let member = RoomMember::new(member_id, format!("user_{}", member_id));
+        for member_id in &members {
+            if *member_id != user_id {
+                let member = RoomMember::new(*member_id, format!("user_{}", member_id));
                 self.room_manager.join_room(room.id, member).await;
+            }
+        }
+
+        // Persist room state to NATS KV
+        if let Some(nats) = &self.nats_client {
+            let state = RoomState {
+                room_id: room.id,
+                name: name.clone(),
+                room_type: room_type.clone(),
+                created_at: current_timestamp(),
+                member_count: members.len() + 1,
+            };
+            if let Err(e) = nats.save_room_state(&state).await {
+                warn!("Failed to persist room {} state to NATS: {}", room.id, e);
             }
         }
 
@@ -877,6 +1100,12 @@ impl MultiStreamServer {
 
             // Remove user from all rooms
             let room_ids = self.room_manager.remove_user_from_all_rooms(user_id).await;
+
+            // Clean up Redis presence + rosters
+            if let Some(ref redis) = self.redis_client {
+                redis.del_presence(user_id).await;
+                redis.remove_from_all_rosters(user_id, &room_ids).await;
+            }
 
             // Notify rooms of user leaving
             let user_left = RoomUserLeft {

@@ -122,7 +122,7 @@ async fn run_server(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     );
     info!("  - Datagrams enabled: {}", config.server.enable_datagrams);
 
-    let server = MultiStreamServer::from_config(&config)?;
+    let server = MultiStreamServer::from_config(&config).await?;
 
     if let Err(e) = server.start().await {
         error!("Server error: {}", e);

@@ -1,17 +1,20 @@
 //! JWT authentication validation for the Garou chat server.
 //!
 //! Provides `AuthValidator` for validating HS256 and RS256 JWTs.
-//! Redis claim caching is wired in Unit 6; this unit does inline validation only.
+//! An optional `Arc<RedisClient>` enables claim caching so repeated
+//! validations of the same token avoid cryptographic work.
 
 use std::fs;
+use std::sync::Arc;
 
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use serde::{Deserialize, Serialize};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::config::AuthSettings;
 use crate::error::{ChatError, Result};
 use crate::protocol::messages::UserId;
+use crate::storage::RedisClient;
 
 // ---------------------------------------------------------------------------
 // Claims
@@ -46,10 +49,13 @@ impl AuthClaims {
 /// Validates JWT bearer tokens and returns decoded `AuthClaims`.
 ///
 /// Supports HS256 (shared secret) and RS256 (RSA public key).
-/// Redis claim caching will be injected in Unit 6.
+/// When an optional `RedisClient` is attached via `with_redis_client()`,
+/// `validate_async()` checks the cache before performing cryptographic
+/// validation, and stores the result on success.
 pub struct AuthValidator {
     decoding_key: DecodingKey,
     validation: Validation,
+    redis_client: Option<Arc<RedisClient>>,
 }
 
 impl std::fmt::Debug for AuthValidator {
@@ -70,6 +76,7 @@ impl AuthValidator {
         Self {
             decoding_key: DecodingKey::from_secret(secret.as_ref()),
             validation,
+            redis_client: None,
         }
     }
 
@@ -80,7 +87,13 @@ impl AuthValidator {
         let mut validation = Validation::new(Algorithm::RS256);
         validation.validate_exp = true;
         validation.required_spec_claims = ["sub".to_string(), "exp".to_string()].into();
-        Ok(Self { decoding_key, validation })
+        Ok(Self { decoding_key, validation, redis_client: None })
+    }
+
+    /// Attach a Redis client for claim caching. Returns `self` for chaining.
+    pub fn with_redis_client(mut self, client: Arc<RedisClient>) -> Self {
+        self.redis_client = Some(client);
+        self
     }
 
     /// Build a validator from application `AuthSettings`.
@@ -122,7 +135,7 @@ impl AuthValidator {
         }
     }
 
-    /// Validate a JWT and return its decoded claims.
+    /// Validate a JWT and return its decoded claims (synchronous, no caching).
     ///
     /// Returns `Err(ChatError::Auth)` with a specific reason:
     /// - "token expired" — `exp` claim is in the past.
@@ -139,6 +152,34 @@ impl AuthValidator {
                     _ => ChatError::auth(format!("invalid token: {}", e)),
                 }
             })
+    }
+
+    /// Validate a JWT with optional Redis cache look-up.
+    ///
+    /// If a `RedisClient` is attached:
+    /// 1. Check the cache — return `Ok(claims)` immediately on a hit.
+    /// 2. Fall back to inline validation.
+    /// 3. Store validated claims in the cache for future requests.
+    ///
+    /// If Redis is unavailable the inline path is used transparently.
+    pub async fn validate_async(&self, token: &str) -> Result<AuthClaims> {
+        // 1. Cache look-up (best-effort)
+        if let Some(ref redis) = self.redis_client {
+            if let Some(cached) = redis.get_cached_claims(token).await {
+                debug!("JWT claim cache hit");
+                return Ok(cached);
+            }
+        }
+
+        // 2. Inline cryptographic validation
+        let claims = self.validate(token)?;
+
+        // 3. Store result in cache (best-effort; errors logged inside)
+        if let Some(ref redis) = self.redis_client {
+            redis.cache_claims(token, &claims).await;
+        }
+
+        Ok(claims)
     }
 }
 

@@ -35,10 +35,15 @@ pub mod config;
 pub mod error;
 pub mod protocol;
 pub mod server;
+pub mod storage;
 pub mod transport;
 
 // Re-export auth types
 pub use auth::{AuthClaims, AuthValidator};
+
+// Re-export storage types
+pub use storage::nats::{NatsClient, RoomState};
+pub use storage::redis::RedisClient;
 
 // Re-export config types
 pub use config::Config;

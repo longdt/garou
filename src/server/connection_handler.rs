@@ -470,7 +470,7 @@ impl ConnectionHandler {
 
                 debug!("Received Auth method={}", auth.method);
 
-                match self.authenticate(&auth) {
+                match self.authenticate(&auth).await {
                     Ok((user_id, username)) => {
                         // Store user info
                         *self.user_id.write().await = Some(user_id);
@@ -571,10 +571,10 @@ impl ConnectionHandler {
     ///
     /// - `"token"`: validates the JWT bearer token via `AuthValidator`.
     /// - `"username"`: dev-only hashed username, no real security.
-    fn authenticate(&self, auth: &Auth) -> Result<(UserId, String)> {
+    async fn authenticate(&self, auth: &Auth) -> Result<(UserId, String)> {
         match auth.method.as_str() {
             "token" => {
-                let claims = self.auth_validator.validate(&auth.credentials)?;
+                let claims = self.auth_validator.validate_async(&auth.credentials).await?;
                 let user_id = claims.user_id()?;
                 Ok((user_id, claims.username))
             }

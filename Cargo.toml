@@ -18,6 +18,9 @@ bytes = "1.5"
 toml = "0.8"
 flatbuffers = "24"
 jsonwebtoken = "9.3"
+async-nats = "0.35"
+futures-core = "0.3"
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 
 [features]
 # Enable JSON wire format instead of FlatBuffers (development/debug only).

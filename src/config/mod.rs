@@ -268,7 +268,7 @@ mod tests {
 
     fn write_config(content: &str) -> std::path::PathBuf {
         let mut path = std::env::temp_dir();
-        path.push(format!("garou_test_config_{}.toml", std::process::id()));
+        path.push(format!("garou_test_config_{}.toml", uuid::Uuid::new_v4()));
         let mut f = std::fs::File::create(&path).unwrap();
         f.write_all(content.as_bytes()).unwrap();
         path
