@@ -4,10 +4,11 @@
 
 ## Steps
 
-- [x] Add `fred = { version = "9", features = ["i-keys", "i-sets"] }` to `Cargo.toml`
+- [x] Add `redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }` to `Cargo.toml`
+- [x] Add `v7` feature to `uuid` dependency in `Cargo.toml`
 - [x] Create `src/storage/redis.rs`:
-  - [x] `RedisClient` struct wrapping `RedisPool` with manual `Debug` impl
-  - [x] `RedisClient::connect(url, pool_size, jwt_cache_ttl_secs)` — pool init, non-fatal pattern
+  - [x] `RedisClient` struct wrapping `ConnectionManager` with manual `Debug` impl
+  - [x] `RedisClient::connect(url, jwt_cache_ttl_secs)` — auto-reconnecting connection, timeout-wrapped
   - [x] `jwt_key(token)` helper — uses JWT signature segment as cache key (no extra dep)
   - [x] `get_cached_claims(token)` — GET + deserialize AuthClaims JSON
   - [x] `cache_claims(token, claims)` — SET EX with configurable or exp-derived TTL
@@ -41,10 +42,10 @@
 
 ## Notes
 
-- Uses `fred = "10"` (latest); feature `tokio-runtime` does NOT exist — use `i-keys` + `i-sets`
-- fred 10 renames: `RedisPool` → `Pool`, `RedisConfig` → `Config`, `RedisError` → `Error` (all in prelude)
-- fred 10 key arguments must be `&str` (not `&String`); use `.as_str()` on owned String keys
-- `Builder::from_config(config).build_pool(n)?` creates the pool (NOT `.set_pool_size(n).build_pool()`)
-- `pool.init().await?` is async and returns `Result<(), Error>` for `Pool`
+- Uses `redis = "0.27"` (redis-rs, actively maintained); replaces abandoned `fred` crate
+- `ConnectionManager` auto-reconnects and multiplexes over a single connection; `Clone` is cheap (Arc-backed)
+- Commands require `&mut self` on the connection — callers clone: `let mut conn = self.conn.clone()`
+- `ConnectionManager::new()` retries on failure rather than returning error; wrap with `tokio::time::timeout`
+- UUID v7 (time-ordered) available via `uuid = { features = ["v7"] }` — used for unique temp file names in tests
 - `validate()` kept sync for tests; `validate_async()` adds the caching layer on top
 - All Redis operations are non-fatal: failures logged at WARN, callers receive Ok
