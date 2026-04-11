@@ -21,6 +21,10 @@ jsonwebtoken = "9.3"
 async-nats = "0.35"
 futures-core = "0.3"
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+metrics = "0.23"
+metrics-exporter-prometheus = "0.15"
+axum = "0.7"
+tokio-util = { version = "0.7", features = ["rt"] }
 
 [features]
 # Enable JSON wire format instead of FlatBuffers (development/debug only).

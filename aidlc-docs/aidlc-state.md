@@ -40,3 +40,8 @@
 ## Extension Configuration
 - **Security Baseline**: ENABLED
 - **Property-Based Testing**: ENABLED (full)
+
+## Global Engineering Policies
+- **Dependency Governance**: All future dependencies MUST be popular and actively maintained. Abandoned/inactive libraries are disallowed unless explicitly exception-approved with documented rationale.
+- **Observability Standard**: OpenTelemetry is mandatory for traces, metrics, and logs across all future work.
+- **Migration Requirement**: Maintain an explicit full observability migration backlog to transition existing telemetry implementations to OpenTelemetry.

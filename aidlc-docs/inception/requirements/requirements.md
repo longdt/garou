@@ -47,8 +47,9 @@ Garou is being refactored from a functional prototype to a production-grade high
 - Zero-copy access: messages read directly from frame payload without heap allocation
 - Fallback: keep JSON for development/debug mode (config flag)
 
-### FR-006: Prometheus Metrics
+### FR-006: OpenTelemetry Metrics
 - Expose `/metrics` endpoint on a separate HTTP port (default: 9090)
+- Metrics instrumentation and export must use OpenTelemetry metrics
 - Required metrics:
   - `garou_connections_total` (counter): total connections accepted
   - `garou_connections_active` (gauge): current active connections
@@ -58,8 +59,8 @@ Garou is being refactored from a functional prototype to a production-grade high
   - `garou_rooms_active` (gauge): rooms with at least one member
   - `garou_hot_rooms_active` (gauge): current hot rooms count
 
-### FR-007: Structured JSON Logging
-- All log output in JSON format (tracing-subscriber with JSON formatter)
+### FR-007: OpenTelemetry Logging
+- All log output must be structured and integrated with OpenTelemetry logs (or OpenTelemetry-compatible bridge where direct SDK support is limited)
 - Log fields: timestamp (ISO 8601), level, target, span fields, message
 - Log level configurable via config file and `RUST_LOG` env var
 
@@ -109,9 +110,10 @@ Garou is being refactored from a functional prototype to a production-grade high
 - No unauthenticated users can send messages
 
 ### NFR-004: Observability
-- Prometheus metrics scrape interval compatible (15s default)
-- Structured logs consumable by log aggregation systems (Fluent Bit, Loki)
-- Distributed tracing ready (span IDs in log fields for future OpenTelemetry integration)
+- OpenTelemetry is mandatory for traces, metrics, and logs across services/components
+- Prometheus scrape compatibility remains supported via OpenTelemetry metrics export path (15s default)
+- Structured logs must be emitted through OpenTelemetry logs pipeline (or OpenTelemetry-compatible bridge)
+- Distributed tracing must be OpenTelemetry-native with context propagation enabled
 
 ### NFR-005: Kubernetes Compatibility
 - Container image: multi-stage Dockerfile (builder + minimal runtime)
@@ -157,3 +159,11 @@ Garou is being refactored from a functional prototype to a production-grade high
 
 - **Security Baseline**: ENABLED — all security rules enforced as blocking constraints
 - **Property-Based Testing**: ENABLED — all PBT rules enforced as blocking constraints
+
+## 7. Dependency Governance Policy
+
+### NFR-006: Dependency Maintenance and Adoption
+- All new third-party dependencies must be popular and actively maintained
+- Abandoned or inactive libraries are disallowed by default
+- Any exception requires explicit approval and documented rationale
+- Dependency selection must consider release recency, maintainer/community activity, issue/PR responsiveness, and ecosystem adoption

@@ -3,7 +3,7 @@
 ## Detailed Analysis Summary
 
 ### Transformation Scope
-- **Transformation Type**: Architectural transformation — adding distributed infrastructure (NATS, Redis), replacing protocol serialization (JSON→FlatBuffers), adding auth, observability, and K8s deployment
+- **Transformation Type**: Architectural transformation — adding distributed infrastructure (NATS, Redis), replacing protocol serialization (JSON→FlatBuffers), adding auth, OpenTelemetry observability (traces/metrics/logs), and K8s deployment
 - **Primary Changes**: Protocol layer, authentication, persistence/pub-sub (NATS JetStream), caching (Redis), observability (Prometheus), configuration management, K8s deployment artifacts
 - **Related Components**: All modules (protocol, transport, server) + new infrastructure integrations
 
@@ -12,7 +12,7 @@
 - **Structural changes**: Yes — new NATS and Redis integration layers; server becomes stateless
 - **Data model changes**: Yes — FlatBuffers schemas replace serde structs for wire format; NATS KV replaces in-memory room state
 - **API changes**: Yes — Auth flow enforced (was stub); message history from JetStream replay
-- **NFR impact**: Yes — 100k+ scale, sub-10ms p99 latency, Prometheus metrics, K8s probes
+- **NFR impact**: Yes — 100k+ scale, sub-10ms p99 latency, OpenTelemetry traces/metrics/logs, K8s probes
 
 ### Component Relationships
 ```
@@ -87,7 +87,7 @@ For each of the 9 units below:
 - [ ] NFR Requirements — **EXECUTE** (per unit)
   - *Rationale*: Performance (FlatBuffers zero-copy, NATS async client), security (JWT, no plaintext secrets), scalability (NATS clustering) requirements per unit
 - [ ] NFR Design — **EXECUTE** (per unit)
-  - *Rationale*: Backpressure patterns (bounded channels), connection pooling (Redis), retry/reconnect (NATS), span instrumentation (tracing)
+  - *Rationale*: Backpressure patterns (bounded channels), connection pooling (Redis), retry/reconnect (NATS), OpenTelemetry instrumentation and propagation (traces/metrics/logs)
 - [ ] Infrastructure Design — **EXECUTE** (Unit 9 only — K8s deployment)
   - *Rationale*: K8s manifests, Dockerfile, Service types (UDP for QUIC, ClusterIP for metrics), ConfigMap/Secret patterns
 - [ ] Code Generation — **EXECUTE** (per unit, always)
@@ -168,18 +168,20 @@ Units are sequenced by dependency — earlier units must be complete before late
 **Risk**: Low — caching layer; non-critical path
 
 ### Unit 7: Observability
-**Scope**: Prometheus metrics + structured JSON logging + health endpoints
+**Scope**: OpenTelemetry traces + metrics + logs + health endpoints
 **Changes**:
-- New `src/metrics/mod.rs`: metrics registry using `metrics` + `metrics-exporter-prometheus` crates
-- Counter/gauge/histogram definitions per FR-006
-- New `src/health/mod.rs`: small Axum HTTP server on metrics port (9090)
-  - `GET /metrics` → Prometheus text format
+- Add OpenTelemetry SDK setup for tracing, metrics, and logging pipelines
+- Configure OTLP export endpoints and resource attributes from config
+- Instrument request/message lifecycle spans and context propagation
+- Define required counters/gauges/histograms per FR-006 through OpenTelemetry metrics
+- Route structured logs through OpenTelemetry log signal (or approved OTel-compatible bridge when needed)
+- New `src/health/mod.rs`: small Axum HTTP server on observability port (9090)
+  - `GET /metrics` → endpoint compatible with configured telemetry scraping/export strategy
   - `GET /health/live` → 200 always
   - `GET /health/ready` → 200 if NATS+Redis healthy, 503 otherwise
-- Update `tracing-subscriber` to use JSON format (`tracing-subscriber::fmt::json()`)
-- Instrument `handle_send_message` with latency histogram
-**Dependencies**: Unit 2 (config for metrics port), Unit 5 + Unit 6 (health checks)
-**Risk**: Low
+- Instrument `handle_send_message` with end-to-end latency measurement
+**Dependencies**: Unit 2 (config for observability/export settings), Unit 5 + Unit 6 (health checks)
+**Risk**: Medium
 
 ### Unit 8: Graceful Shutdown
 **Scope**: SIGTERM/SIGINT handling and clean drain
@@ -233,7 +235,7 @@ Unit 1 (Core Fixes)
   3. Messages persisted to NATS JetStream before ACK
   4. Cross-node message delivery via NATS pub/sub
   5. FlatBuffers wire protocol (with JSON debug fallback)
-  6. Prometheus metrics at `/metrics`, health probes at `/health/live` and `/health/ready`
+  6. OpenTelemetry-based observability for traces, metrics, and logs, plus health probes at `/health/live` and `/health/ready`
   7. TOML configuration file support
   8. Graceful SIGTERM shutdown
   9. Multi-stage Dockerfile + K8s manifests
@@ -241,4 +243,24 @@ Unit 1 (Core Fixes)
   - All property-based tests pass (FlatBuffers codec round-trips, frame codec invariants)
   - Security baseline rules met (JWT validated, no plaintext secrets)
   - Integration tests pass with live NATS + Redis (Docker Compose test environment)
+  - OpenTelemetry pipelines validated for traces, metrics, and logs in local and K8s-like environments
   - Server handles 10k concurrent connections in load test without OOM
+
+---
+
+## Cross-Cutting Dependency Governance (All Future Work)
+
+- All new third-party dependencies MUST be popular and actively maintained.
+- Abandoned/inactive libraries are disallowed unless explicitly approved with a documented exception.
+- Dependency selection must include a brief maintenance-health check (release recency, maintainer activity, issue/PR responsiveness, ecosystem adoption).
+- This policy applies to all future units and backlog items.
+
+---
+
+## Full Observability Migration Backlog (Mandatory)
+
+1. Replace existing non-OTel metrics pipeline with OpenTelemetry metrics implementation.
+2. Replace/bridge existing logging pipeline to OpenTelemetry logs with structured fields.
+3. Ensure tracing is OpenTelemetry-native with propagation across async boundaries and inter-service calls.
+4. Standardize exporter/collector configuration for local development and Kubernetes deployment.
+5. Add telemetry verification checklist and automated validation tests for traces, metrics, and logs.
