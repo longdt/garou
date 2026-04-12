@@ -35,7 +35,8 @@
 | Code Generation Unit 5 | COMPLETED |
 | Code Generation Unit 6 | COMPLETED |
 | Code Generation Unit 7-9 | COMPLETED |
-| Build and Test | PENDING |
+| Build and Test | COMPLETED |
+| Operations | COMPLETED |
 
 ## Extension Configuration
 - **Security Baseline**: ENABLED
