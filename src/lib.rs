@@ -33,8 +33,11 @@
 pub mod auth;
 pub mod config;
 pub mod error;
+pub mod health;
+pub mod metrics;
 pub mod protocol;
 pub mod server;
+pub mod shutdown;
 pub mod storage;
 pub mod transport;
 

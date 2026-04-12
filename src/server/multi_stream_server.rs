@@ -212,6 +212,16 @@ impl MultiStreamServer {
         Arc::clone(&self.shard_router)
     }
 
+    /// Return clones of the storage client handles for use by the health prober.
+    pub fn storage_handles(
+        &self,
+    ) -> (Option<Arc<NatsClient>>, Option<Arc<RedisClient>>) {
+        (
+            self.nats_client.as_ref().map(Arc::clone),
+            self.redis_client.as_ref().map(Arc::clone),
+        )
+    }
+
     /// Start the server
     pub async fn start(mut self) -> Result<()> {
         info!("Starting multi-stream server on {}", self.config.bind_addr);

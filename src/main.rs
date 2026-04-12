@@ -1,23 +1,23 @@
 //! QUIC Chat Server
 //!
-//! This application demonstrates a high-performance chat system using QUIC protocol
-//! with multi-stream architecture for ultra-low-latency messaging.
-//!
 //! Usage:
 //!   cargo run -- server                            # Run with defaults
 //!   cargo run -- server --config config.toml       # Load config from file
 //!   cargo run -- server --port 4433                # Override port
 
+use std::env;
+use std::sync::Arc;
+
 use garou::MultiStreamServer;
 use garou::config::Config;
-use std::env;
-use tracing::{error, info};
+use garou::health::{HealthDeps, spawn_health_server};
+use garou::metrics::{Metrics, init_telemetry};
+use garou::shutdown::{ShutdownCoordinator, install_signal_handlers};
+use opentelemetry::global;
+use tracing::{error, info, warn};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging
-    tracing_subscriber::fmt::init();
-
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
@@ -37,7 +37,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => {
             eprintln!("Unknown command: {}", args[1]);
             print_usage();
-            return Ok(());
         }
     }
 
@@ -75,24 +74,19 @@ fn print_usage() {
     println!("    RUST_LOG=debug cargo run -- server");
 }
 
-/// Load config: from file if `--config` is specified, otherwise defaults.
 fn load_config(args: &[String]) -> Result<Config, Box<dyn std::error::Error>> {
     for i in 0..args.len() {
         if args[i] == "--config" && i + 1 < args.len() {
-            let path = &args[i + 1];
-            let cfg = Config::load(path)?;
-            return Ok(cfg);
+            return Ok(Config::load(&args[i + 1])?);
         }
     }
     Ok(Config::default())
 }
 
-/// Apply CLI overrides onto an already-loaded Config.
 fn apply_cli_overrides(config: &mut Config, args: &[String]) {
     for i in 0..args.len() {
         if args[i] == "--port" && i + 1 < args.len() {
             if let Ok(port) = args[i + 1].parse::<u16>() {
-                // Replace port in bind_addr (keep host part)
                 if let Some(colon) = config.server.bind_addr.rfind(':') {
                     config.server.bind_addr =
                         format!("{}:{}", &config.server.bind_addr[..colon], port);
@@ -110,24 +104,74 @@ fn apply_cli_overrides(config: &mut Config, args: &[String]) {
 }
 
 async fn run_server(config: Config) -> Result<(), Box<dyn std::error::Error>> {
-    info!("Starting Multi-Stream QUIC Chat Server...");
+    // ── 1. Telemetry ────────────────────────────────────────────────────────
+    // Guard must live for the entire process lifetime so providers flush on drop.
+    let _telemetry_guard = if config.observability.enabled {
+        Some(init_telemetry(
+            "garou",
+            &config.observability.otlp_endpoint,
+        ))
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .init();
+        None
+    };
 
-    info!("Configuration:");
-    info!("  - Bind address: {}", config.server.bind_addr);
-    info!("  - Max connections: {}", config.server.max_connections);
-    info!("  - Number of shards: {}", config.shard.num_shards);
-    info!(
-        "  - Hot room threshold: {} msgs/sec",
-        config.shard.hot_room_threshold
-    );
-    info!("  - Datagrams enabled: {}", config.server.enable_datagrams);
+    let metrics = Arc::new(Metrics::new(&global::meter("garou")));
+
+    // ── 2. QUIC server (storage clients live inside) ─────────────────────────
+    info!("Starting Multi-Stream QUIC Chat Server...");
+    info!("  bind_addr         : {}", config.server.bind_addr);
+    info!("  max_connections   : {}", config.server.max_connections);
+    info!("  num_shards        : {}", config.shard.num_shards);
+    info!("  hot_room_threshold: {} msgs/sec", config.shard.hot_room_threshold);
+    info!("  datagrams         : {}", config.server.enable_datagrams);
+    info!("  otlp_endpoint     : {}", config.observability.otlp_endpoint);
 
     let server = MultiStreamServer::from_config(&config).await?;
 
-    if let Err(e) = server.start().await {
-        error!("Server error: {}", e);
-        return Err(e.into());
+    // ── 3. Health probes — wired to real storage clients ─────────────────────
+    let (nats_handle, redis_handle) = server.storage_handles();
+    let health_deps = HealthDeps::new(nats_handle, redis_handle);
+    let health_addr: std::net::SocketAddr = config.observability.health_addr.parse()?;
+    spawn_health_server(health_addr, Arc::clone(&health_deps))?;
+    info!("  health_addr       : {}", health_addr);
+
+    // ── 4. Signal handling ───────────────────────────────────────────────────
+    let coordinator = Arc::new(ShutdownCoordinator::new(
+        config.server.shutdown_timeout_secs,
+    ));
+    let mut signal_rx = install_signal_handlers();
+
+    let coord_bg = Arc::clone(&coordinator);
+    let server_task = tokio::spawn(async move {
+        if let Err(e) = server.start().await {
+            error!("Server error: {e}");
+        }
+        coord_bg.initiate(); // ensure shutdown propagates if server exits first
+    });
+
+    // ── 5. Wait for signal ───────────────────────────────────────────────────
+    tokio::select! {
+        _ = signal_rx.recv() => {
+            info!("Shutdown signal received — beginning graceful drain");
+        }
+        _ = server_task => {
+            info!("Server task exited — beginning graceful drain");
+        }
     }
 
+    // ── 6. Ordered shutdown ──────────────────────────────────────────────────
+    // Stop accepting new connections and mark health as not-ready.
+    health_deps.set_accepting(false);
+    coordinator.initiate();
+    metrics.set_rooms_delta(0); // flush any pending gauge
+
+    info!("Draining {} active connection(s)...", coordinator.active_count());
+    coordinator.wait_drained().await;
+
+    // Telemetry providers are flushed when _telemetry_guard drops at end of scope.
+    info!("Shutdown complete");
     Ok(())
 }

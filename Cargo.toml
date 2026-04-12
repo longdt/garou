@@ -9,7 +9,6 @@ rustls = { version = "0.23", features = ["ring"] }
 tokio = { version = "1.0", features = ["full"] }
 uuid = { version = "1.10", features = ["v7"] }
 tracing = "0.1"
-tracing-subscriber = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
@@ -21,10 +20,14 @@ jsonwebtoken = "9.3"
 async-nats = "0.35"
 futures-core = "0.3"
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
-metrics = "0.23"
-metrics-exporter-prometheus = "0.15"
-axum = "0.7"
-tokio-util = { version = "0.7", features = ["rt"] }
+ntex = { version = "3.7.2", features = ["tokio"] }
+opentelemetry = "0.31.0"
+opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.31.1", features = ["grpc-tonic", "metrics", "logs"] }
+opentelemetry-semantic-conventions = "0.31.0"
+opentelemetry-appender-tracing = "0.31.1"
+tracing-opentelemetry = "0.32.1"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [features]
 # Enable JSON wire format instead of FlatBuffers (development/debug only).

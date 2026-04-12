@@ -1,0 +1,103 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: garou-server
+  namespace: garou
+  labels:
+    app: garou
+    component: server
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: garou
+      component: server
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: garou
+        component: server
+    spec:
+      terminationGracePeriodSeconds: 35  # > shutdown_timeout_secs (30)
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: garou
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: garou
+          image: garou:latest
+          imagePullPolicy: IfNotPresent
+          args: ["server", "--config", "/etc/garou/config.toml"]
+          ports:
+            - name: quic
+              containerPort: 4433
+              protocol: UDP
+            - name: health
+              containerPort: 9090
+              protocol: TCP
+          env:
+            - name: RUST_LOG
+              value: "info"
+            - name: OTEL_SERVICE_NAME
+              value: "garou"
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 1
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/garou/config.toml
+              subPath: config.toml
+              readOnly: true
+            - name: secrets
+              mountPath: /etc/garou/secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: garou-config
+        - name: secrets
+          secret:
+            secretName: garou-secrets
+        - name: tmp
+          emptyDir: {}

@@ -19,7 +19,7 @@ pub struct Config {
     pub auth: AuthSettings,
     pub nats: NatsSettings,
     pub redis: RedisSettings,
-    pub metrics: MetricsSettings,
+    pub observability: ObservabilitySettings,
     pub shard: ShardSettings,
     pub protocol: ProtocolSettings,
 }
@@ -31,7 +31,7 @@ impl Default for Config {
             auth: AuthSettings::default(),
             nats: NatsSettings::default(),
             redis: RedisSettings::default(),
-            metrics: MetricsSettings::default(),
+            observability: ObservabilitySettings::default(),
             shard: ShardSettings::default(),
             protocol: ProtocolSettings::default(),
         }
@@ -200,15 +200,24 @@ impl Default for RedisSettings {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
-pub struct MetricsSettings {
-    /// HTTP bind address for /metrics and /health endpoints
-    pub bind_addr: String,
+pub struct ObservabilitySettings {
+    /// OTLP gRPC endpoint (e.g. "http://localhost:4317")
+    pub otlp_endpoint: String,
+    /// Service name reported to the OTel collector
+    pub service_name: String,
+    /// Disable all OTel export (useful in local dev without a collector)
+    pub enabled: bool,
+    /// HTTP bind address for /health/live and /health/ready probes
+    pub health_addr: String,
 }
 
-impl Default for MetricsSettings {
+impl Default for ObservabilitySettings {
     fn default() -> Self {
         Self {
-            bind_addr: "0.0.0.0:9090".to_string(),
+            otlp_endpoint: "http://localhost:4317".to_string(),
+            service_name: "garou".to_string(),
+            enabled: true,
+            health_addr: "0.0.0.0:9090".to_string(),
         }
     }
 }

@@ -41,6 +41,7 @@ jwt_algorithm = "HS256"
 # ---------------------------------------------------------------------------
 [nats]
 # NATS server URL. Default: "nats://localhost:4222"
+# K8s: "nats://nats.nats:4222"
 url = "nats://localhost:4222"
 
 # JetStream stream name for chat messages. Default: "GAROU_CHAT"
@@ -57,6 +58,7 @@ max_age_secs = 0
 # ---------------------------------------------------------------------------
 [redis]
 # Redis connection URL. Default: "redis://localhost:6379"
+# K8s: "redis://redis.redis:6379"
 url = "redis://localhost:6379"
 
 # Connection pool size. Default: 16
@@ -66,12 +68,23 @@ pool_size = 16
 jwt_cache_ttl_secs = 0
 
 # ---------------------------------------------------------------------------
-# Metrics & Health
+# Observability (OpenTelemetry OTLP push)
+# Metrics are exported via OTLP — there is no Prometheus scrape endpoint.
+# Health probes (liveness / readiness) are served on health_addr.
 # ---------------------------------------------------------------------------
-[metrics]
-# HTTP bind address for /metrics (Prometheus) and /health/* endpoints.
-# Default: "0.0.0.0:9090"
-bind_addr = "0.0.0.0:9090"
+[observability]
+# OTLP gRPC endpoint for traces, metrics, and logs. Default: "http://localhost:4317"
+# K8s: "http://otel-collector.monitoring:4317"
+otlp_endpoint = "http://localhost:4317"
+
+# Service name reported to the OTel collector. Default: "garou"
+service_name = "garou"
+
+# Disable all OTel export (useful in local dev without a collector). Default: true
+enabled = true
+
+# HTTP address for /health/live and /health/ready Kubernetes probes. Default: "0.0.0.0:9090"
+health_addr = "0.0.0.0:9090"
 
 # ---------------------------------------------------------------------------
 # Shard routing

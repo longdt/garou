@@ -60,6 +60,20 @@ impl RedisClient {
         Ok(Self { conn, jwt_cache_ttl_secs })
     }
 
+    /// Probe connectivity by sending a Redis PING command.
+    ///
+    /// Returns `true` if Redis responds "PONG" within 2 seconds.
+    pub async fn ping(&self) -> bool {
+        let mut conn = self.conn.clone();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            redis::cmd("PING").query_async::<String>(&mut conn),
+        )
+        .await
+        .map(|r| r.is_ok())
+        .unwrap_or(false)
+    }
+
     // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------

@@ -169,6 +169,19 @@ impl NatsClient {
         &self.server_id
     }
 
+    /// Probe connectivity by flushing pending data and waiting for a server ACK.
+    ///
+    /// Returns `true` if NATS responds within 2 seconds, `false` otherwise.
+    pub async fn ping(&self) -> bool {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            self.client.flush(),
+        )
+        .await
+        .map(|r| r.is_ok())
+        .unwrap_or(false)
+    }
+
     // -----------------------------------------------------------------------
     // Message persistence
     // -----------------------------------------------------------------------

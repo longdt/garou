@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: garou-config
+  namespace: garou
+data:
+  config.toml: |
+    [server]
+    bind_addr = "0.0.0.0:4433"
+    max_connections = 10000
+    idle_timeout_secs = 300
+    enable_datagrams = true
+    shutdown_timeout_secs = 30
+
+    [auth]
+    jwt_algorithm = "HS256"
+    # jwt_secret is injected via the GAROU_JWT_SECRET env var at runtime
+
+    [nats]
+    url = "nats://nats.nats:4222"
+    stream_name = "GAROU_CHAT"
+    max_messages = 1000000
+    max_age_secs = 0
+
+    [redis]
+    url = "redis://redis.redis:6379"
+    pool_size = 16
+    jwt_cache_ttl_secs = 0
+
+    [observability]
+    otlp_endpoint = "http://otel-collector.monitoring:4317"
+    service_name = "garou"
+    enabled = true
+    health_addr = "0.0.0.0:9090"
+
+    [shard]
+    num_shards = 8
+    hot_room_threshold = 100
+    cool_down_threshold = 20
+    cool_down_period_secs = 60
+    max_hot_rooms = 10
+    rate_window_secs = 10
+
+    [protocol]
+    debug_json = false

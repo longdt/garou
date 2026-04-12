@@ -34,7 +34,7 @@
 | Code Generation Unit 4 | COMPLETED |
 | Code Generation Unit 5 | COMPLETED |
 | Code Generation Unit 6 | COMPLETED |
-| Code Generation Unit 7-9 | PENDING |
+| Code Generation Unit 7-9 | COMPLETED |
 | Build and Test | PENDING |
 
 ## Extension Configuration

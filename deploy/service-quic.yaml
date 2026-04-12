@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: garou-quic
+  namespace: garou
+  labels:
+    app: garou
+    component: server
+spec:
+  type: LoadBalancer
+  selector:
+    app: garou
+    component: server
+  ports:
+    - name: quic
+      port: 4433
+      targetPort: 4433
+      protocol: UDP
+  # Preserve client source IP for QUIC connection affinity.
+  externalTrafficPolicy: Local
