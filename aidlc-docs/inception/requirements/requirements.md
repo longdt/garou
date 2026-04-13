@@ -48,16 +48,17 @@ Garou is being refactored from a functional prototype to a production-grade high
 - Fallback: keep JSON for development/debug mode (config flag)
 
 ### FR-006: OpenTelemetry Metrics
-- Expose `/metrics` endpoint on a separate HTTP port (default: 9090)
+- ~~Expose `/metrics` endpoint on a separate HTTP port (default: 9090)~~ **[REVISED]**: Metrics are exported via OTLP push (gRPC) to an OpenTelemetry Collector — no Prometheus scrape endpoint is served. The health port (9090) exposes only `/health/live` and `/health/ready`.
 - Metrics instrumentation and export must use OpenTelemetry metrics
-- Required metrics:
+- Required metrics (all instrumented via OTel instruments in `Metrics` struct):
   - `garou_connections_total` (counter): total connections accepted
-  - `garou_connections_active` (gauge): current active connections
-  - `garou_messages_total` (counter, labels: room_id): messages processed
+  - `garou_connections_active` (up-down counter): current active connections
+  - `garou_authenticated_connections` (counter): successfully authenticated connections
+  - `garou_messages_total` (counter): messages processed
   - `garou_message_latency_ms` (histogram): end-to-end message processing latency
-  - `garou_nats_publish_errors_total` (counter): NATS publish failures
-  - `garou_rooms_active` (gauge): rooms with at least one member
-  - `garou_hot_rooms_active` (gauge): current hot rooms count
+  - `garou_errors_total` (counter, label: `kind`): errors by type (covers `garou_nats_publish_errors_total` via `kind=nats_publish`)
+  - `garou_rooms_active` (up-down counter): rooms with at least one member
+- Note: `garou_hot_rooms_active` was not instrumented in this release; deferred to a future milestone
 
 ### FR-007: OpenTelemetry Logging
 - All log output must be structured and integrated with OpenTelemetry logs (or OpenTelemetry-compatible bridge where direct SDK support is limited)
@@ -111,9 +112,10 @@ Garou is being refactored from a functional prototype to a production-grade high
 
 ### NFR-004: Observability
 - OpenTelemetry is mandatory for traces, metrics, and logs across services/components
-- Prometheus scrape compatibility remains supported via OpenTelemetry metrics export path (15s default)
+- ~~Prometheus scrape compatibility remains supported via OpenTelemetry metrics export path (15s default)~~ **[REVISED]**: Prometheus scrape model replaced by OTLP push to an OTel Collector. Prometheus compatibility can be restored via the Collector's Prometheus exporter if needed.
 - Structured logs must be emitted through OpenTelemetry logs pipeline (or OpenTelemetry-compatible bridge)
 - Distributed tracing must be OpenTelemetry-native with context propagation enabled
+- `OTEL_EXPORTER_OTLP_ENDPOINT` env var or `config.toml [observability].otlp_endpoint` configures the OTLP destination
 
 ### NFR-005: Kubernetes Compatibility
 - Container image: multi-stage Dockerfile (builder + minimal runtime)
@@ -167,3 +169,7 @@ Garou is being refactored from a functional prototype to a production-grade high
 - Abandoned or inactive libraries are disallowed by default
 - Any exception requires explicit approval and documented rationale
 - Dependency selection must consider release recency, maintainer/community activity, issue/PR responsiveness, and ecosystem adoption
+
+### Applied Decisions
+- `fred` crate (Redis client) was evaluated and found to be abandoned; replaced by `redis = "0.27"` (redis-rs), which is the primary maintained Rust Redis client
+- `axum` was evaluated for the health HTTP server but replaced by `ntex` for consistency with the existing chat server stack and its lower dependency footprint

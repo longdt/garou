@@ -27,10 +27,10 @@ garou/
 │   │   └── redis.rs             RedisClient
 │   │
 │   ├── metrics/
-│   │   └── mod.rs               init_metrics(), increment_*/record_*/set_* helpers
+│   │   └── mod.rs               TelemetryGuard, init_telemetry(), Metrics (OTel instruments: counters, histograms, gauges)
 │   │
 │   ├── health/
-│   │   └── mod.rs               HealthServer (Axum: /health/live, /health/ready, /metrics)
+│   │   └── mod.rs               HealthDeps, spawn_health_server() (ntex: /health/live, /health/ready)
 │   │
 │   ├── protocol/
 │   │   ├── mod.rs               Protocol module
@@ -87,28 +87,27 @@ jsonwebtoken = "9.3"
 
 # NATS
 async-nats = "0.35"
+futures-core = "0.3"  # poll_fn stream drain (avoids futures-util macro conflict)
 
-# Redis
-fred = { version = "9", features = ["tokio-runtime", "pool"] }
+# Redis (NOTE: fred was replaced — fred crate is abandoned; redis-rs is the maintained alternative)
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 
 # FlatBuffers
 flatbuffers = "24"
-# build dependency:
-# flatc is a system binary (installed in Dockerfile)
+# flatc binary downloaded to /tmp at build time (no sudo required)
 
-# Metrics
-metrics = "0.23"
-metrics-exporter-prometheus = "0.15"
+# OpenTelemetry (replaces metrics + metrics-exporter-prometheus)
+opentelemetry = "0.31.0"
+opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.31.1", features = ["grpc-tonic", "metrics", "logs"] }
+opentelemetry-semantic-conventions = "0.31.0"
+opentelemetry-appender-tracing = "0.31.1"
+tracing-opentelemetry = "0.32.1"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
-# HTTP (health + metrics server)
-axum = { version = "0.7", features = ["tokio"] }
-tokio = { version = "1.0", features = ["full"] }   # already present
-
-# Signal handling
-tokio-util = { version = "0.7", features = ["rt"] }
-
-# Cancellation
-tokio-util = { version = "0.7", features = ["sync"] }  # CancellationToken
+# HTTP health server (NOTE: axum replaced by ntex — lighter weight, consistent with chat server stack)
+ntex = { version = "3.7.2", features = ["tokio"] }
+tokio = { version = "1.0", features = ["full"] }   # already present; signal feature used for shutdown
 ```
 
 ## Key Design Decisions Summary
@@ -116,28 +115,36 @@ tokio-util = { version = "0.7", features = ["sync"] }  # CancellationToken
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Module organization | Single crate, new submodules | Simpler build, no cross-crate versioning |
-| NATS failure mode | Fail fast | Simpler, client retries; no data loss risk |
+| NATS failure mode | Non-fatal (log + continue) | Non-blocking startup; server degrades without NATS |
 | FlatBuffers codegen | Build-time via build.rs | Always in sync with schemas; no stale generated code |
 | Redis failure mode | Degrade gracefully | Resilience over strict caching; JWT re-validated inline |
-| NATS connection model | Pool (configurable size) | Higher throughput under concurrent publishes |
+| NATS connection model | Single client (async-nats) | async-nats handles internal connection pooling |
+| Redis crate | redis = "0.27" (redis-rs) | fred crate was abandoned; redis-rs is actively maintained |
+| Metrics export | OTLP push via gRPC | Single pipeline; no Prometheus scrape endpoint needed |
+| Health/metrics HTTP server | ntex | Lightweight, consistent with chat server stack; axum dependency dropped |
 | Server Arc pattern | Arc<Self> at construction | Fixes BUG-002; no per-connection re-wrapping |
 | Message ID | AtomicU64 | Replaces RwLock<u64> for lock-free ID generation |
 | Message buffer | VecDeque | O(1) front removal fixes BUG-003 |
 | Channels | Bounded mpsc | Backpressure fixes BUG-004 |
+| Shutdown architecture | Single ShutdownCoordinator in mod.rs | Simpler than 3-file design; broadcast channel fans out to all tasks |
+| JWT validate_async | Separate from validate() | validate() stays sync for tests; caching layer added on top |
 
 ## Component Initialization Order
 
 ```
-1. Config           (no deps)
-2. Metrics          (no deps — global registry)
-3. Redis            (needs Config)
-4. NATS             (needs Config)
-5. Auth             (needs Config + Redis)
-6. RoomManager      (no deps)
-7. ShardRouter      (needs Config)
-8. MultiStreamServer(needs all above)
-9. HealthServer     (needs NATS + Redis + Metrics)
-10. QUIC Endpoint   (needs Config + TLS cert)
+1. Config               (no deps)
+2. TelemetryGuard       (no deps — sets global OTel providers; held for process lifetime)
+3. Metrics              (needs TelemetryGuard — instruments from global meter)
+4. Redis                (needs Config; non-fatal if unreachable)
+5. NATS                 (needs Config; non-fatal if unreachable)
+6. Auth                 (needs Config + optional Redis for JWT cache)
+7. RoomManager          (no deps)
+8. ShardRouter          (needs Config)
+9. MultiStreamServer    (needs Config, Auth, NATS, Redis, RoomManager, ShardRouter)
+10. HealthDeps          (needs NATS + Redis handles from MultiStreamServer)
+11. spawn_health_server (needs HealthDeps; starts ntex on health_addr)
+12. ShutdownCoordinator (needs Config.server.shutdown_timeout_secs)
+13. QUIC Endpoint       (needs Config + TLS cert; started inside MultiStreamServer.run())
 ```
 
 ## Security Baseline Compliance
